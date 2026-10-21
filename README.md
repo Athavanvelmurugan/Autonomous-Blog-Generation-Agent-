@@ -90,32 +90,30 @@ Deterministic programmatic command linter and structured verification score brea
 <details>
 <summary><b>📄 View Sample Generated Article Excerpt</b></summary>
 
-```markdown
-# Mastering LangGraph StateGraph: Building Fault-Tolerant Multi-Agent DAGs
+<br/>
 
-> **Published**: Oct 2026 · **Reading Time**: 6 min · **Fact-Check Score**: 9.2/10 (PASSED)  
+> ### Mastering LangGraph StateGraph: Building Fault-Tolerant Multi-Agent DAGs
+>
+> **Published**: Oct 2026 &bull; **Reading Time**: 6 min &bull; **Fact-Check Score**: 9.2/10 (PASSED)  
 > **Citations**: LangGraph Official Docs (GitHub raw), LangChain State Schema Reference
+>
+> #### 1. The Limitations of Linear Script Chains
+> Linear chains break down when intermediate steps produce ambiguous outputs. In a production 
+> pipeline, each state transition must be typed and checkpointed...
+>
+> #### 2. StateGraph Implementation Pattern
+> ```python
+> workflow = StateGraph(BlogState)
+> workflow.add_node("research_agent", run_research)
+> workflow.add_node("content_generator", run_writer)
+> workflow.add_node("verifier_agent", run_verifier)
+> ```
+>
+> #### 3. Verified Audit Summary
+> - CLI Commands Verified: 3/3 passed
+> - Banned AI Clichés Detected: 0
+> - Hedging Excuses Found: 0
 
-## 1. The Limitations of Linear Script Chains
-Linear chains break down when intermediate steps produce ambiguous outputs. In a production 
-pipeline, each state transition must be typed and checkpointed...
-
-## 2. Setting Up the StateGraph
-```python
-from langgraph.graph import StateGraph, START, END
-from backend.app.schema.state_schema import BlogState
-
-workflow = StateGraph(BlogState)
-workflow.add_node("research_agent", run_research)
-workflow.add_node("content_generator", run_writer)
-workflow.add_node("verifier_agent", run_verifier)
-```
-
-## 3. Verified Audit Summary
-- CLI Commands Verified: 3/3 passed
-- Banned AI Clichés Detected: 0
-- Hedging Excuses Found: 0
-```
 </details>
 
 ---
@@ -536,8 +534,10 @@ The verifier engine ([`backend/app/agent/nodes.py`](backend/app/agent/nodes.py#L
    - Scans for repetitive AI idioms (*"delve into"*, *"testament to"*, *"game-changer"*).
    - Deducts quality score and prompts the writer to substitute clear, concrete terminology.
 4. **Dynamic Temperature Step-Down**:
-   - If the score is $< 7.5$, the state machine steps down writer temperature:
-     $$\text{Effective Temperature} = \max(0.1, \text{Base Temp} - (0.1 \times \text{Revision Count}))$$
+   - If the score is `< 7.5`, the state machine steps down writer temperature:
+     ```text
+     Effective Temperature = max(0.1, Base Temp - (0.1 × Revision Count))
+     ```
    - This tightens model focus on subsequent attempts, reducing creative drift.
 
 ---
