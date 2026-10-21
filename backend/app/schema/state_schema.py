@@ -32,7 +32,7 @@ class BlogState(TypedDict):
     
     # Real-Time Web Research Context & Citations
     research_data: Optional[str]
-    sources: List[Dict[str, str]]
+    sources: List[Dict[str, Any]]
 
     # Generated content in English (or primary output)
     title: str

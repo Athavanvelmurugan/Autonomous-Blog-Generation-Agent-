@@ -45,7 +45,7 @@ class BlogGenerationResponse(BaseModel):
     content: str
     verification_score: Optional[float] = Field(8.5, description="Fact check and quality score out of 10")
     critique: Optional[str] = Field(None, description="Editorial review feedback")
-    sources: List[Dict[str, str]] = Field(default_factory=list, description="Citations and live sources retrieved")
+    sources: List[Dict[str, Any]] = Field(default_factory=list, description="Citations and live sources retrieved")
     original_title: Optional[str] = None
     original_content: Optional[str] = None
     execution_time_seconds: float
@@ -62,7 +62,7 @@ class BlogPostSummary(BaseModel):
     content: str
     verification_score: Optional[float] = 8.5
     critique: Optional[str] = None
-    sources: List[Dict[str, str]] = Field(default_factory=list)
+    sources: List[Dict[str, Any]] = Field(default_factory=list)
     original_title: Optional[str] = None
     original_content: Optional[str] = None
     execution_time_seconds: float

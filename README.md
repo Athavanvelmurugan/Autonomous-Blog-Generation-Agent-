@@ -11,7 +11,7 @@
 [![React](https://img.shields.io/badge/React-18.3+-61DAFB?style=flat-square&logo=react&logoColor=black)](https://react.dev)
 [![UV](https://img.shields.io/badge/UV-0.13+-DE5FE9?style=flat-square&logo=astral&logoColor=white)](https://astral.sh/uv)
 [![License](https://img.shields.io/badge/License-MIT-green?style=flat-square)](LICENSE)
-[![Tests](https://img.shields.io/badge/Tests-16%20Passed-brightgreen?style=flat-square)](#testing)
+[![Tests](https://img.shields.io/badge/Tests-17%20Passed-brightgreen?style=flat-square)](#testing)
 
 <br/>
 

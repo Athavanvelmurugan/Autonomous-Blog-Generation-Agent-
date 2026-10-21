@@ -157,3 +157,28 @@ async def test_user_repository_and_api_key():
         # 4. Invalid key fails
         invalid_check = await user_repo.validate_api_key("agy_non_existent_token")
         assert invalid_check is None
+
+
+@pytest.mark.asyncio
+async def test_blog_post_summary_with_float_reliability_score():
+    """Verify that BlogPostSummary accepts float reliability_score in sources without Pydantic validation error."""
+    from backend.app.schema.api_schema import BlogPostSummary
+    summary = BlogPostSummary(
+        id=1,
+        topic="Testing Sources",
+        tone="Technical",
+        target_language="English",
+        title="Test Title",
+        content="Test Content",
+        sources=[{
+            "title": "Example Source",
+            "url": "https://example.com",
+            "snippet": "A test snippet",
+            "domain": "example.com",
+            "reliability_score": 1.0,
+        }],
+        execution_time_seconds=1.23,
+    )
+    assert summary.sources[0]["reliability_score"] == 1.0
+    assert summary.sources[0]["title"] == "Example Source"
+

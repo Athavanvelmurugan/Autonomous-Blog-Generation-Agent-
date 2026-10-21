@@ -62,14 +62,14 @@ class BlogPost(Base):
         self.steps_completed_json = json.dumps(steps)
 
     @property
-    def sources(self) -> List[Dict[str, str]]:
+    def sources(self) -> List[Dict[str, Any]]:
         try:
             return json.loads(self.sources_json or "[]")
         except Exception:
             return []
 
     @sources.setter
-    def sources(self, srcs: List[Dict[str, str]]):
+    def sources(self, srcs: List[Dict[str, Any]]):
         self.sources_json = json.dumps(srcs)
 
     def to_dict(self):
