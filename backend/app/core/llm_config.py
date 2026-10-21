@@ -25,37 +25,57 @@ class NodeLLMConfig:
 
 # Canonical Node Name Mapping
 NODE_ALIASES = {
+    "plan_queries": "plan_queries",
+    "plan": "plan_queries",
+    "extract_facts": "extract_facts",
+    "extract": "extract_facts",
     "research": "research_agent",
     "research_agent": "research_agent",
     "title": "title_generator",
     "title_generator": "title_generator",
+    "write": "content_generator",
     "writer": "content_generator",
     "content_generator": "content_generator",
     "reviewer": "verifier_agent",
     "verifier": "verifier_agent",
+    "verify": "verifier_agent",
     "verifier_agent": "verifier_agent",
     "translator": "translator",
     "translate": "translator",
 }
 
-# Approved Default Baselines
+# Approved Default Baselines (requirement 12: research/extract/verify = 0, write = 0.35, title = 0.5)
 DEFAULT_NODE_SPECS = {
+    "plan_queries": {
+        "temperature": 0.0,
+        "max_tokens": 512,
+        "env_temp_keys": ["PLAN_TEMPERATURE", "RESEARCH_TEMPERATURE"],
+        "env_tokens_keys": ["PLAN_MAX_TOKENS"],
+        "env_model_keys": ["PLAN_MODEL", "RESEARCH_MODEL"],
+    },
+    "extract_facts": {
+        "temperature": 0.0,
+        "max_tokens": 2048,
+        "env_temp_keys": ["EXTRACT_TEMPERATURE", "RESEARCH_TEMPERATURE"],
+        "env_tokens_keys": ["EXTRACT_MAX_TOKENS"],
+        "env_model_keys": ["EXTRACT_MODEL", "RESEARCH_MODEL"],
+    },
     "research_agent": {
-        "temperature": 0.1,
+        "temperature": 0.0,
         "max_tokens": 512,
         "env_temp_keys": ["RESEARCH_TEMPERATURE"],
         "env_tokens_keys": ["RESEARCH_MAX_TOKENS"],
         "env_model_keys": ["RESEARCH_MODEL"],
     },
     "title_generator": {
-        "temperature": 0.65,
+        "temperature": 0.5,
         "max_tokens": 150,
         "env_temp_keys": ["TITLE_TEMPERATURE"],
         "env_tokens_keys": ["TITLE_MAX_TOKENS"],
         "env_model_keys": ["TITLE_MODEL"],
     },
     "content_generator": {
-        "temperature": 0.4,
+        "temperature": 0.35,
         "max_tokens": 4096,
         "env_temp_keys": ["WRITER_TEMPERATURE", "CONTENT_TEMPERATURE"],
         "env_tokens_keys": ["WRITER_MAX_TOKENS", "CONTENT_MAX_TOKENS"],
@@ -63,7 +83,7 @@ DEFAULT_NODE_SPECS = {
     },
     "verifier_agent": {
         "temperature": 0.0,
-        "max_tokens": 1024,
+        "max_tokens": 1500,
         "env_temp_keys": ["VERIFIER_TEMPERATURE", "REVIEWER_TEMPERATURE"],
         "env_tokens_keys": ["VERIFIER_MAX_TOKENS", "REVIEWER_MAX_TOKENS"],
         "env_model_keys": ["VERIFIER_MODEL", "REVIEWER_MODEL"],
@@ -122,6 +142,8 @@ def build_node_configs() -> Dict[str, NodeLLMConfig]:
         
         # 1. Model resolution
         model_env = _get_env_val(spec["env_model_keys"])
+        if not model_env and node_name == "verifier_agent" and getattr(settings, "VERIFIER_MODEL", None):
+            model_env = settings.VERIFIER_MODEL
         model = model_env if model_env else global_model
         if model_env:
             source = "env"

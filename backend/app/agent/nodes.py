@@ -2,60 +2,347 @@ import json
 import logging
 import re
 import time
-from typing import List
+from datetime import datetime, timezone
+from typing import List, Dict, Any, Optional
 from langchain_core.messages import SystemMessage, HumanMessage
 from backend.app.config import get_settings
-from backend.app.schema.state_schema import BlogState, VerifierEvaluation
+from backend.app.schema.state_schema import BlogState, FactItem, VerificationReport
 from backend.app.core.prompts import (
+    QUERY_PLANNING_SYSTEM_PROMPT,
     TITLE_SYSTEM_PROMPT,
     CONTENT_SYSTEM_PROMPT,
     VERIFIER_SYSTEM_PROMPT,
     TRANSLATION_SYSTEM_PROMPT,
 )
 from backend.app.core.llm import get_llm, get_node_config
-from backend.app.core.tools import search_trending_data
+from backend.app.core.groq_guard import safe_llm_invoke
 from backend.app.agent.persistence import record_node_step
+from backend.app.core.research.classifier import classify_topic, filter_by_recency
+from backend.app.core.research.collectors import parallel_collect_all
+from backend.app.core.research.dedupe import dedupe_sources
+from backend.app.core.research.fact_extractor import parallel_extract_facts
+from backend.app.agent.citations import post_process_citations
+from backend.app.agent.verifier_checks import run_full_verification
 
 logger = logging.getLogger(__name__)
 settings = get_settings()
 
 
-async def research_trending_data_node(state: BlogState) -> dict:
+# ==========================================
+# 1. Query Planning Node
+# ==========================================
+async def plan_queries_node(state: BlogState) -> dict:
     """
-    Node 1: Retrieves real-time trending web facts, latest developments, and source links.
-    Bypasses LLM training cutoffs.
+    Node 1: Analyzes the topic, injects today's date, classifies topic type,
+    and plans 3-4 diverse, high-precision search queries.
     """
     start_time = time.perf_counter()
-    topic = state["topic"]
-    logger.info(f"[Node 1: Trend Research Agent] Querying live web data for: '{topic}'")
+    topic = state["topic"].strip()
+    retry_count = state.get("query_retry_count", 0)
     
-    search_result = search_trending_data(topic, max_results=5)
+    # Inject today's date if not present
+    today_date = state.get("today_date") or datetime.now(timezone.utc).strftime("%Y-%m-%d")
     
+    # Classify topic
+    classification = classify_topic(topic)
+    topic_type = state.get("topic_type") or classification["topic_type"]
+    category = state.get("category") or classification["category"]
+
+    logger.info(
+        f"[Node 1: Plan Queries] Topic: '{topic[:40]}...' (Type: {topic_type}, "
+        f"Category: {category}, Date: {today_date}, Retry #{retry_count})"
+    )
+
+    llm = get_llm("plan_queries")
+    user_payload = (
+        f"Topic: {topic}\n"
+        f"Current Date: {today_date}\n"
+        f"Topic Type: {topic_type}\n"
+        f"Category: {category}\n"
+    )
+    if retry_count > 0:
+        user_payload += (
+            f"NOTE: Previous queries yielded insufficient sources. "
+            f"Generate BROADER queries targeting official releases, news, and foundational overview."
+        )
+
+    messages = [
+        SystemMessage(content=QUERY_PLANNING_SYSTEM_PROMPT),
+        HumanMessage(content=user_payload),
+    ]
+
+    queries: List[str] = []
+    try:
+        response = await safe_llm_invoke(llm, messages)
+        raw_output = response.content.strip()
+
+        clean_json = raw_output
+        if "```" in clean_json:
+            m = re.search(r"```(?:json)?\s*(\[.*?\])\s*```", clean_json, re.DOTALL)
+            if m:
+                clean_json = m.group(1).strip()
+            else:
+                clean_json = re.sub(r"^```[a-zA-Z]*\n", "", clean_json)
+                clean_json = re.sub(r"\n```$", "", clean_json)
+
+        parsed = json.loads(clean_json)
+        if isinstance(parsed, list):
+            queries = [str(q).strip() for q in parsed if str(q).strip()]
+    except Exception as e:
+        logger.warning(f"[Plan Queries] JSON parsing failed: {e}. Generating fallback query set.")
+
+    if not queries:
+        # Strip conversational prompt phrases (e.g., 'write a blog about ...')
+        clean_topic = re.sub(
+            r"^(?:write\s+(?:a\s+)?(?:blog|article|post|guide)(?:\s+(?:about|on|for))?\s*|\b(?:please\s+)?generate\s+(?:a\s+)?blog\s+(?:about|on|for)?\s*)",
+            "",
+            topic,
+            flags=re.IGNORECASE,
+        ).strip()
+        if not clean_topic:
+            clean_topic = topic
+
+        year = today_date[:4]
+        if topic_type == "evergreen":
+            queries = [
+                f"{clean_topic} history overview",
+                f"{clean_topic} timeline origins architecture",
+                f"{clean_topic} records documentation",
+            ]
+        else:
+            queries = [
+                f"{clean_topic} overview analysis",
+                f"{clean_topic} {year} news updates",
+                f"{clean_topic} official documentation",
+            ]
+
     steps = list(state.get("steps_completed", []))
-    if "research_agent" not in steps:
-        steps.append("research_agent")
+    if "plan_queries" not in steps:
+        steps.append("plan_queries")
+
+    node_timings = dict(state.get("node_timings") or {})
+    node_timings["plan_queries"] = round(time.perf_counter() - start_time, 3)
+
+    prior_steps = state.get("steps_completed", [])
+    effective_retry = retry_count + 1 if "clean_dedupe" in prior_steps else retry_count
 
     result = {
-        "research_data": search_result["context"],
-        "sources": search_result["sources"],
-        "current_step": "research_completed",
+        "planned_queries": queries,
+        "query_retry_count": effective_retry,
+        "today_date": today_date,
+        "topic_type": topic_type,
+        "category": category,
+        "current_step": "plan_queries_completed",
         "steps_completed": steps,
-        "revision_count": state.get("revision_count", 0),
+        "node_timings": node_timings,
     }
-    await record_node_step("research_agent", state, result, start_time, None)
+    llm_metrics = {"provider": settings.MODEL_PROVIDER, "model": settings.MODEL_NAME, "temperature": 0.0}
+    await record_node_step("plan_queries", state, result, start_time, llm_metrics)
     return result
 
 
+# ==========================================
+# 2. Multi-Source Collection Node
+# ==========================================
+async def collect_node(state: BlogState) -> dict:
+    """
+    Node 2: Concurrently fetches candidate articles from Search API (Tavily/DDG),
+    category-specific RSS feeds, and Hacker News / ArXiv with error isolation and timeouts.
+    """
+    start_time = time.perf_counter()
+    topic = state["topic"]
+    category = state.get("category", "general")
+    planned_queries = state.get("planned_queries", [topic])
+    timeout = getattr(settings, "SEARCH_TIMEOUT_SECONDS", 10.0)
+
+    logger.info(f"[Node 2: Collect] Launching parallel fetch across multi-sources for {len(planned_queries)} queries...")
+    raw_collected = await parallel_collect_all(
+        topic=topic,
+        category=category,
+        planned_queries=planned_queries,
+        timeout=timeout
+    )
+
+    # Accumulate with any prior raw sources from retries
+    existing_raw = list(state.get("raw_sources", []))
+    combined_raw = existing_raw + raw_collected
+
+    steps = list(state.get("steps_completed", []))
+    if "collect" not in steps:
+        steps.append("collect")
+
+    node_timings = dict(state.get("node_timings") or {})
+    node_timings["collect"] = round(time.perf_counter() - start_time, 3)
+
+    result = {
+        "raw_sources": combined_raw,
+        "current_step": "collect_completed",
+        "steps_completed": steps,
+        "node_timings": node_timings,
+    }
+    await record_node_step("collect", state, result, start_time, None)
+    return result
+
+
+# ==========================================
+# 3. Clean & Deduplicate Node
+# ==========================================
+async def clean_dedupe_node(state: BlogState) -> dict:
+    """
+    Node 3: Normalizes URLs, deduplicates titles using RapidFuzz, applies recency filtering
+    strictly to trending topics, and evaluates the minimum-sources requirement.
+    """
+    start_time = time.perf_counter()
+    raw_sources = state.get("raw_sources", [])
+    topic_type = state.get("topic_type", "trending")
+    min_sources = getattr(settings, "MIN_SOURCES_REQUIRED", 3)
+
+    logger.info(f"[Node 3: Clean & Dedupe] Processing {len(raw_sources)} raw sources (Type: {topic_type})...")
+    
+    # 1. URL Normalization + Fuzzy Title Deduplication (no embeddings)
+    deduped = dedupe_sources(raw_sources)
+
+    # 2. Recency Filtering (applied only to trending topics)
+    filtered = filter_by_recency(deduped, topic_type=topic_type)
+
+    # Prioritize authoritative sources with substantive content length (e.g. Wikipedia)
+    filtered.sort(
+        key=lambda s: (
+            1 if "wikipedia.org" in (s.get("domain") or "") else 0,
+            len(s.get("raw_content") or s.get("snippet") or "")
+        ),
+        reverse=True
+    )
+
+    distinct_domains = {s.get("domain") for s in filtered if s.get("domain")}
+    is_sufficient = len(filtered) >= min_sources and len(distinct_domains) >= 2
+
+    # Verify topical grounding for specific entity names/keywords
+    topic_clean = re.sub(
+        r"^(?:write\s+(?:a\s+)?(?:blog|article|post|guide)(?:\s+(?:about|on|for))?\s*|\b(?:please\s+)?generate\s+(?:a\s+)?blog\s+(?:about|on|for)?\s*)",
+        "",
+        state.get("topic", ""),
+        flags=re.IGNORECASE,
+    ).strip()
+    distinctive_terms = [
+        w.lower().rstrip("s") for w in re.findall(r"\b[a-zA-Z0-9_-]{6,}\b", topic_clean)
+        if w.lower() not in {"history", "architecture", "overview", "review", "protocol", "quantum", "concurrency", "performance", "processing", "threading", "models", "period", "periods", "system", "systems", "release", "releases", "internal", "framework"}
+    ]
+    error_msg = None
+    if is_sufficient and distinctive_terms:
+        all_text = " ".join([f"{s.get('title', '')} {s.get('url', '')} {s.get('snippet', '')}" for s in filtered]).lower()
+        if not any(term in all_text for term in distinctive_terms):
+            is_sufficient = False
+            error_msg = f"Insufficient ground-truth sources: No collected sources match distinctive entity '{distinctive_terms[0]}'. Halting to prevent ungrounded writing."
+
+    if not is_sufficient and not error_msg:
+        error_msg = (
+            f"Insufficient ground-truth sources found: retrieved {len(filtered)} valid sources across "
+            f"{len(distinct_domains)} distinct domains. Required at least {min_sources} sources across 2 distinct domains."
+        )
+    if error_msg:
+        logger.warning(f"[Clean & Dedupe] {error_msg}")
+
+    # Build backward-compatible research context snippet string
+    context_snippets = []
+    for s in filtered[:5]:
+        context_snippets.append(f"Source: {s.get('title')} ({s.get('url')})\nFacts: {s.get('snippet')}")
+    research_summary = "\n\n".join(context_snippets)
+
+    steps = list(state.get("steps_completed", []))
+    if "clean_dedupe" not in steps:
+        steps.append("clean_dedupe")
+
+    node_timings = dict(state.get("node_timings") or {})
+    node_timings["clean_dedupe"] = round(time.perf_counter() - start_time, 3)
+
+    result = {
+        "deduped_sources": filtered,
+        "sources": filtered,
+        "research_data": research_summary,
+        "error": error_msg if not is_sufficient else None,
+        "current_step": "clean_dedupe_completed",
+        "steps_completed": steps,
+        "node_timings": node_timings,
+    }
+    await record_node_step("clean_dedupe", state, result, start_time, None)
+    return result
+
+
+# ==========================================
+# 4. Atomic Fact Extraction Node
+# ==========================================
+async def extract_facts_node(state: BlogState) -> dict:
+    """
+    Node 4: Extracts atomic facts per source in parallel.
+    Programmatically verifies that each evidence_quote is a verbatim substring of the source text.
+    Assigns sequential IDs [F1, F2, ...] to verified facts.
+    """
+    start_time = time.perf_counter()
+    deduped_sources = state.get("deduped_sources", [])
+    topic = state["topic"]
+
+    logger.info(f"[Node 4: Extract Facts] Extracting facts from {len(deduped_sources)} verified sources...")
+    verified_fact_items = await parallel_extract_facts(deduped_sources, topic)
+
+    facts_dict_list = [f.model_dump() for f in verified_fact_items]
+
+    # Format Markdown facts table for LLM writer context
+    facts_table_lines = [
+        "| ID | Verified Claim | Domain | Date | Verbatim Evidence |",
+        "| :--- | :--- | :--- | :--- | :--- |",
+    ]
+    for f in verified_fact_items:
+        date_str = f.published_date or "N/A"
+        evidence_clean = f.evidence_quote.replace("|", "/")
+        claim_clean = f.claim.replace("|", "/")
+        facts_table_lines.append(f"| {f.id} | {claim_clean} | {f.domain} | {date_str} | \"{evidence_clean}\" |")
+
+    facts_table_md = "\n".join(facts_table_lines)
+
+    steps = list(state.get("steps_completed", []))
+    if "extract_facts" not in steps:
+        steps.append("extract_facts")
+
+    error_msg = None
+    min_facts = getattr(settings, "MIN_FACTS_REQUIRED", 3)
+    if len(verified_fact_items) < min_facts:
+        error_msg = (
+            f"Insufficient verified atomic facts extracted: found {len(verified_fact_items)} facts. "
+            f"Required at least {min_facts} verified facts to write an authoritative, non-redundant blog post."
+        )
+        logger.warning(f"[Node 4: Extract Facts] {error_msg}")
+
+    node_timings = dict(state.get("node_timings") or {})
+    node_timings["extract_facts"] = round(time.perf_counter() - start_time, 3)
+
+    result = {
+        "facts": facts_dict_list,
+        "research_data": facts_table_md,
+        "error": error_msg,
+        "current_step": "extract_facts_completed",
+        "steps_completed": steps,
+        "node_timings": node_timings,
+    }
+    llm_metrics = {"provider": settings.MODEL_PROVIDER, "model": settings.MODEL_NAME, "temperature": 0.0}
+    await record_node_step("extract_facts", state, result, start_time, llm_metrics)
+    return result
+
+
+# ==========================================
+# 5. Title Generator Node
+# ==========================================
 async def generate_title_node(state: BlogState) -> dict:
     """
-    Node 2: Generates an engaging, SEO-optimized title grounded in trending context.
+    Node 5: Generates an engaging, SEO-optimized title strictly grounded in verified facts.
     """
     start_time = time.perf_counter()
     creativity = state.get("creativity", "balanced")
-    logger.info(f"[Node 2: Title Generator] Topic: '{state['topic']}', Tone: '{state.get('tone', 'Informative')}', Creativity: '{creativity}'")
+    logger.info(f"[Node 5: Title Generator] Topic: '{state['topic']}'")
     llm = get_llm("title_generator", creativity_level=creativity)
 
-    research_context = state.get("research_data") or "No live data available."
+    facts = state.get("facts", [])
+    facts_preview = "\n".join([f"[{f.get('id')}] {f.get('claim')}" for f in facts[:8]]) or "No facts."
 
     messages = [
         SystemMessage(content=TITLE_SYSTEM_PROMPT),
@@ -63,389 +350,194 @@ async def generate_title_node(state: BlogState) -> dict:
             content=(
                 f"Topic: {state['topic']}\n"
                 f"Tone: {state.get('tone', 'Informative')}\n"
-                f"Trending Facts / Context:\n{research_context[:2000]}"
+                f"Verified Facts Context:\n{facts_preview}"
             )
         ),
     ]
 
-    response = await llm.ainvoke(messages)
-    raw_title = response.content.strip()
-
-    # Clean any accidental outer quotation marks
-    clean_title = raw_title.strip('"\'')
-    if "\n" in clean_title:
-        clean_title = clean_title.split("\n")[0].strip('"\'')
+    clean_title = state["topic"]
+    try:
+        response = await safe_llm_invoke(llm, messages)
+        raw_title = response.content.strip().strip('"\'')
+        if "\n" in raw_title:
+            raw_title = raw_title.split("\n")[0].strip('"\'')
+        if len(raw_title) > 5:
+            clean_title = raw_title
+    except Exception as e:
+        logger.warning(f"[Title Generator] LLM call failed: {e}")
 
     steps = list(state.get("steps_completed", []))
     if "title_generator" not in steps:
         steps.append("title_generator")
+
+    node_timings = dict(state.get("node_timings") or {})
+    node_timings["title_generator"] = round(time.perf_counter() - start_time, 3)
 
     result = {
         "title": clean_title,
         "original_title": clean_title,
         "current_step": "title_generated",
         "steps_completed": steps,
+        "node_timings": node_timings,
     }
-    llm_metrics = {
-        "provider": settings.MODEL_PROVIDER,
-        "model": settings.MODEL_NAME,
-        "temperature": 0.7,
-    }
+    llm_metrics = {"provider": settings.MODEL_PROVIDER, "model": settings.MODEL_NAME, "temperature": 0.5}
     await record_node_step("title_generator", state, result, start_time, llm_metrics)
     return result
 
 
+# ==========================================
+# 6. Content Generator / Writer Node
+# ==========================================
 async def generate_content_node(state: BlogState) -> dict:
     """
-    Node 3: Generates a comprehensive blog post in Markdown format, grounded in trending facts
-    and incorporating feedback and hallucination flags from the verifier agent if in a revision loop.
+    Node 6: Writes an authoritative blog post grounded strictly in the verified facts table.
+    Cites fact IDs [F1], [F2] exclusively; never outputs raw URLs.
+    Post-processes the draft into Markdown links and automatically creates the Sources appendix.
     """
     start_time = time.perf_counter()
     revisions = state.get("revision_count", 0)
-    creativity = state.get("creativity", "balanced")
     writer_cfg = get_node_config("content_generator")
-    base_temp = writer_cfg.temperature
+    base_temp = writer_cfg.temperature  # 0.35 from config
 
-    # Apply creativity offset ONLY to writing nodes
-    if creativity == "low":
-        base_temp = max(0.1, round(base_temp - 0.1, 2))
-    elif creativity == "high":
-        base_temp = min(1.0, round(base_temp + 0.1, 2))
-
-    # Dynamic Verifier Loop: Step down temperature by 0.1 per revision (min 0.1), up to 2 retries
+    # Step down temperature by 0.1 per revision (min 0.1)
     effective_temp = max(0.1, round(base_temp - (0.1 * min(revisions, 2)), 2))
-    if revisions > 0:
-        logger.info(
-            f"[Node 3: Content Generator] Verifier retry loop #{revisions}: "
-            f"Stepping down writer temperature from {base_temp} to {effective_temp} to minimize hallucination."
-        )
+    logger.info(f"[Node 6: Writer] Drafting '{state['title']}' (Revision #{revisions}, Temp: {effective_temp})")
 
-    logger.info(f"[Node 3: Content Generator] Title: '{state['title']}' (Revision #{revisions}, Temp: {effective_temp})")
     llm = get_llm("content_generator", temperature_override=effective_temp)
 
-    research_context = state.get("research_data") or "Standard industry knowledge."
-    critique_context = state.get("critique")
-    hallucinations = state.get("detected_hallucinations", [])
-    unverified_cmds = state.get("unverified_commands", [])
+    facts = state.get("facts", [])
+    facts_table_md = state.get("research_data") or "No verified facts table available."
+    today_date = state.get("today_date") or datetime.now(timezone.utc).strftime("%Y-%m-%d")
 
     prompt_content = (
         f"Title: {state['title']}\n"
         f"Topic: {state['topic']}\n"
-        f"Tone: {state.get('tone', 'Informative')}\n\n"
-        f"Trending Research Facts & Fresh Context:\n{research_context}\n\n"
+        f"Tone: {state.get('tone', 'Informative')}\n"
+        f"Current Date: {today_date}\n\n"
+        f"VERIFIED FACTS TABLE (Only write claims from this table; cite every claim as [F1], [F2], etc.):\n"
+        f"{facts_table_md}\n\n"
     )
 
-    if (critique_context and "PASSED" not in critique_context.upper()) or hallucinations or unverified_cmds:
+    critique_context = state.get("critique")
+    hallucinations = state.get("detected_hallucinations") or []
+    report = state.get("verification_report") or {}
+    unsupported = report.get("unsupported_claims", [])
+
+    if revisions > 0 and (critique_context or hallucinations or unsupported):
         prompt_content += "--- CRITICAL EDITORIAL REVISION REQUIRED ---\n"
         if critique_context:
-            prompt_content += f"Editorial Feedback:\n{critique_context}\n\n"
+            prompt_content += f"Editorial Audit Feedback:\n{critique_context}\n\n"
         if hallucinations:
-            prompt_content += "Flagged Fabricated Claims / Hallucinations to Remove:\n"
+            prompt_content += "Flagged Unsupported Claims to Remove:\n"
             for h in hallucinations:
                 prompt_content += f"- {h}\n"
             prompt_content += "\n"
-        if unverified_cmds:
-            prompt_content += "Unverified CLI Commands / Flags that MUST be corrected or removed:\n"
-            for c in unverified_cmds:
-                prompt_content += f"- {c}\n"
+        if unsupported:
+            prompt_content += "Statements Lacking Grounding to Remove or Cite:\n"
+            for u in unsupported:
+                prompt_content += f"- {u}\n"
             prompt_content += "\n"
-        prompt_content += "Strictly eliminate all flagged errors above and ensure all commands match the verified context exactly.\n\n"
+        prompt_content += "Strictly eliminate all flagged claims and cite remaining statements accurately.\n\n"
 
-    prompt_content += "Please draft the authoritative, production-grade blog post now."
+    prompt_content += (
+        "Write the complete Markdown blog post now. Remember: Every factual body paragraph MUST cite "
+        "at least one verified fact ID like [F1], [F2]. Do NOT write uncited filler or background claims. "
+        "Do NOT write raw URLs. Do NOT write a manual Sources section."
+    )
 
     messages = [
         SystemMessage(content=CONTENT_SYSTEM_PROMPT),
         HumanMessage(content=prompt_content),
     ]
 
-    response = await llm.ainvoke(messages)
-    blog_content = response.content.strip()
+    response = await safe_llm_invoke(llm, messages)
+    raw_draft = response.content.strip()
 
-    # Fallback recovery if model generated a refusal or empty output
-    if not blog_content or len(blog_content.split()) < 30 or blog_content.lower().startswith("i'm sorry") or blog_content.lower().startswith("i cannot"):
-        logger.warning(f"[Node 3: Content Generator] Initial generation was empty or refused. Triggering direct fallback generation.")
-        direct_messages = [
-            SystemMessage(content="You are an expert editorial writer. Write an authentic, engaging, well-structured, comprehensive blog post in Markdown format with clear section headings. Do not include conversational introductory remarks."),
-            HumanMessage(content=f"Write a comprehensive, engaging blog post on the topic: '{state['topic']}'. Title: '{state['title']}'. Tone: {state.get('tone', 'Informative')}.\n\nContext and Highlights:\n{research_context[:1500]}\n\nProvide rich, factual, and informative content in clean Markdown with H2 and H3 headings.")
-        ]
-        direct_resp = await llm.ainvoke(direct_messages)
-        if direct_resp.content and len(direct_resp.content.strip().split()) >= 30:
-            blog_content = direct_resp.content.strip()
-
-    # Retain previous valid draft if latest revision yielded empty content
-    if (not blog_content or len(blog_content.split()) < 30) and state.get("content"):
-        if len(state["content"].split()) >= 30:
-            logger.warning("[Node 3: Content Generator] Revision produced empty output. Retaining previous valid draft.")
-            blog_content = state["content"]
-
-    blog_content = blog_content.replace("\u2011", "-")
+    # Post-process citations: convert [F1] to Markdown links and append ## Sources appendix
+    sources = state.get("sources", [])
+    full_content, sources_section = post_process_citations(raw_draft, facts, sources)
 
     steps = list(state.get("steps_completed", []))
     if "content_generator" not in steps:
         steps.append("content_generator")
 
+    node_timings = dict(state.get("node_timings") or {})
+    node_timings["content_generator"] = round(time.perf_counter() - start_time, 3)
+
     result = {
-        "content": blog_content,
-        "original_content": blog_content,
+        "content": full_content,
+        "original_content": full_content,
+        "sources_section": sources_section,
         "current_step": "content_generated",
         "steps_completed": steps,
         "revision_count": revisions + 1,
+        "node_timings": node_timings,
     }
-    llm_metrics = {
-        "provider": settings.MODEL_PROVIDER,
-        "model": settings.MODEL_NAME,
-        "temperature": effective_temp,
-    }
+    llm_metrics = {"provider": settings.MODEL_PROVIDER, "model": settings.MODEL_NAME, "temperature": effective_temp}
     await record_node_step("content_generator", state, result, start_time, llm_metrics)
     return result
 
-
-def _extract_commands_and_paths(markdown_text: str) -> List[str]:
-    """Extracts all shell command lines and inline shell invocations for verification."""
-    # Normalize unicode non-breaking hyphens to standard ASCII hyphen
-    norm_text = markdown_text.replace("\u2011", "-")
-    extracted = []
-
-    # 1. Parse code blocks
-    code_blocks = re.findall(r"```(?:bash|sh|zsh)?\s*\n(.*?)```", norm_text, re.DOTALL)
-    valid_starters = ("npx ", "npm ", "rea ", "pip ", "python ", "git ", "curl ", "export ", "chmod ", "cd ", "docker ")
-
-    for block in code_blocks:
-        for line in block.split("\n"):
-            line = line.strip()
-            if not line or line.startswith("#"):
-                continue
-            # Shell prompt lines
-            if line.startswith("$ "):
-                extracted.append(line[2:].strip())
-            elif any(line.startswith(prefix) for prefix in valid_starters):
-                extracted.append(line)
-
-    # 2. Parse inline backtick commands
-    inline_cmds = re.findall(r"`([^`]+)`", norm_text)
-    for ic in inline_cmds:
-        ic_clean = ic.strip()
-        if ic_clean.startswith("$ "):
-            ic_clean = ic_clean[2:].strip()
-        if any(ic_clean.startswith(prefix) for prefix in valid_starters):
-            extracted.append(ic_clean)
-
-    return list(dict.fromkeys(extracted))  # Deduplicate while preserving order
+# Alias for graph convention
+write_node = generate_content_node
 
 
+# ==========================================
+# 7. Verification Node
+# ==========================================
 async def verify_content_node(state: BlogState) -> dict:
     """
-    Node 4: Fact-checks the generated draft against research data.
-    Combines deterministic programmatic command checks with structured LLM evaluation.
+    Node 7: Performs two-stage verification:
+    Stage 1: Deterministic rule-based checks (fact IDs, numbers/dates, URLs, citation density).
+    Stage 2: LLM semantic evaluation at temp 0.0 with optional VERIFIER_MODEL.
     """
     start_time = time.perf_counter()
-    logger.info(f"[Node 4: Verifier Agent] Auditing content for '{state['title']}' (Deterministic Temp: 0.0)")
-    llm = get_llm("verifier_agent")
+    logger.info(f"[Node 7: Verifier Agent] Auditing content for '{state['title']}'...")
 
-    research_context = state.get("research_data") or "No live facts provided."
-    # Normalize non-breaking hyphens in content draft
-    content_draft = state["content"].replace("\u2011", "-")
+    content = state.get("content", "")
+    facts = state.get("facts", [])
+    sources = state.get("sources", [])
 
-    # 1. Deterministic Programmatic Pre-Check for CLI commands, hedging, and clichés
-    extracted_cmds = _extract_commands_and_paths(content_draft)
-    programmatic_unverified = []
-
-    is_rea_context = "rea-agents" in research_context.lower() or "morluto" in research_context.lower() or "rea" in state.get("topic", "").lower().split()
-
-    # A. Command validation (only when relevant to REA/tools)
-    if is_rea_context:
-        for cmd in extracted_cmds:
-            clean_cmd = re.sub(r"^\$\s*", "", cmd).strip()
-            tokens = clean_cmd.split()
-            if not tokens:
-                continue
-
-            if "verify:mcp" in clean_cmd:
-                programmatic_unverified.append(f"`{clean_cmd}`: command 'verify:mcp' does not exist in repository.")
-            elif "report.html" in clean_cmd or "open analysis" in clean_cmd:
-                programmatic_unverified.append(f"`{clean_cmd}`: fabricated HTML report viewer; REA outputs JSON directly.")
-            elif "query-evidence" in clean_cmd:
-                programmatic_unverified.append(f"`{clean_cmd}`: fabricated subcommand 'query-evidence'; REA queries are performed via MCP client agent tool calls.")
-            elif "analyze-javascript-application" in clean_cmd:
-                for bad_flag in ["--hopper", "--ghidra", "--ida", "--binary", "--report", "--output-html", "--filter"]:
-                    if bad_flag in clean_cmd:
-                        programmatic_unverified.append(
-                            f"`{clean_cmd}`: Invalid flag '{bad_flag}'. Native engines (Hopper, Ghidra) are accessed via MCP tool adapters, not CLI flags on the JavaScript analyzer."
-                        )
-            elif tokens[0] in ["npx", "npm"]:
-                idx = 1
-                while idx < len(tokens) and tokens[idx].startswith("-"):
-                    idx += 1
-                pkg = tokens[idx] if idx < len(tokens) else ""
-                idx += 1
-                subcmd = tokens[idx] if idx < len(tokens) and not tokens[idx].startswith("-") else ""
-                
-                if "rea-agents" in pkg or "rea" in pkg:
-                    valid_rea_subcmds = ["setup", "analyze-javascript-application", "update", "--help", "-h"]
-                    if subcmd and subcmd not in valid_rea_subcmds:
-                        programmatic_unverified.append(
-                            f"`{clean_cmd}`: subcommand '{subcmd}' is not a valid subcommand for rea-agents (valid subcommands: {', '.join(valid_rea_subcmds)})."
-                        )
-
-    # B. Anti-Hedging Linter
-    hedging_patterns = [
-        r"\(if .*? not documented.*?\)",
-        r"\(if .*? syntax differs.*?\)",
-        r"\(if .*? differs.*?\)",
-        r"will reveal the exact syntax",
-        r"catalog will reveal",
-        r"consult .*? help flag if syntax differs",
-        r"in case the flag is named differently",
-        r"syntax may vary",
-    ]
-    for hp in hedging_patterns:
-        matches = re.findall(hp, content_draft, re.IGNORECASE)
-        for m in matches:
-            programmatic_unverified.append(f"Hedging excuse detected: '{m}'. State exact verified facts or omit.")
-
-    # C. Banned AI Clichés Linter
-    cliche_patterns = [
-        r"\bnot just a tool\b",
-        r"\bnotoriously fragmented\b",
-        r"\bdelve into\b",
-        r"\bin today's fast-paced\b",
-        r"\btestament to\b",
-        r"\bhappy reverse engineering\b",
-        r"\bgame-changer\b",
-    ]
-    for cp in cliche_patterns:
-        matches = re.findall(cp, content_draft, re.IGNORECASE)
-        for m in matches:
-            programmatic_unverified.append(f"Banned AI cliché detected: '{m}'. Replace with concrete terminology.")
-
-    # D. Concrete Evidence Artifact Check (only if context specifically references evidence artifacts)
-    if is_rea_context and "evidence" in research_context.lower() and "```json" not in content_draft:
-        programmatic_unverified.append("Missing concrete Evidence JSON block: Draft must include a sample structured JSON evidence artifact.")
-
-    messages = [
-        SystemMessage(content=VERIFIER_SYSTEM_PROMPT),
-        HumanMessage(
-            content=(
-                f"Live Research Context:\n{research_context}\n\n"
-                f"Generated Blog Draft:\n{content_draft}"
-            )
-        ),
-    ]
-
-    response = await llm.ainvoke(messages)
-    raw_eval = response.content.strip()
-
-    # 2. Resilient Structured JSON Parsing
-    evaluation_data = None
-    try:
-        # Strip potential markdown code fence wrappers
-        clean_json = raw_eval
-        if "```" in clean_json:
-            json_match = re.search(r"```(?:json)?\s*(\{.*?\})\s*```", clean_json, re.DOTALL)
-            if json_match:
-                clean_json = json_match.group(1).strip()
-            else:
-                clean_json = re.sub(r"^```[a-zA-Z]*\n", "", clean_json)
-                clean_json = re.sub(r"\n```$", "", clean_json)
-        
-        parsed_dict = json.loads(clean_json)
-        if "score" in parsed_dict:
-            try:
-                parsed_dict["score"] = max(0.0, min(10.0, float(parsed_dict["score"])))
-            except (ValueError, TypeError):
-                parsed_dict["score"] = 5.0
-        evaluation_data = VerifierEvaluation(**parsed_dict)
-    except Exception as parse_err:
-        logger.warning(f"[Verifier Agent] Direct JSON parsing failed ({parse_err}). Attempting regex extraction fallback.")
-        # Fallback to regex extraction
-        score = 8.0
-        score_m = re.search(r'"score":\s*([\d\.]+)', raw_eval)
-        if score_m:
-            try:
-                score = max(0.0, min(10.0, float(score_m.group(1))))
-            except Exception:
-                score = 8.0
-        
-        critique = "Passed quality audit."
-        crit_m = re.search(r'"critique":\s*"([^"]+)"', raw_eval)
-        if crit_m:
-            critique = crit_m.group(1)
-            
-        try:
-            evaluation_data = VerifierEvaluation(
-                score=score,
-                passed=(score >= 8.0),
-                detected_hallucinations=[],
-                unverified_commands=[],
-                critique=critique
-            )
-        except Exception:
-            evaluation_data = VerifierEvaluation(
-                score=5.0,
-                passed=False,
-                detected_hallucinations=[],
-                unverified_commands=[],
-                critique="Audit score defaulted due to verifier formatting."
-            )
-
-    # 3. Merge deterministic pre-check findings
-    final_score = float(evaluation_data.score)
-    final_hallucinations = list(evaluation_data.detected_hallucinations)
-    final_unverified_cmds = list(set(evaluation_data.unverified_commands + programmatic_unverified))
-    final_critique = evaluation_data.critique
-
-    # Separate critical command/evidence errors from stylistic notes
-    critical_errors = [u for u in programmatic_unverified if "command" in u.lower() or "flag" in u.lower() or "evidence" in u.lower()]
-    stylistic_issues = [u for u in programmatic_unverified if u not in critical_errors]
-
-    if critical_errors:
-        final_score = min(final_score, 5.5)
-        final_hallucinations.extend(critical_errors)
-        final_critique = (
-            f"REJECTED: Found programmatic command issues: {'; '.join(critical_errors)}. "
-            f"Original critique: {final_critique}"
-        )
-    elif stylistic_issues:
-        # Subtle deduction for cliches without failing an otherwise great article
-        final_score = max(7.2, final_score - (0.4 * len(stylistic_issues)))
-        final_critique = f"{final_critique} (Notes: {'; '.join(stylistic_issues)})"
-
-    is_passed = final_score >= 7.5 and len(final_hallucinations) == 0
-
-    logger.info(
-        f"[Verifier Agent Result] Score: {final_score:.1f}/10 | Passed: {is_passed} | "
-        f"Hallucinations: {len(final_hallucinations)} | Unverified Cmds: {len(final_unverified_cmds)}"
-    )
+    report: VerificationReport = await run_full_verification(content, facts, sources)
 
     steps = list(state.get("steps_completed", []))
     if "verifier_agent" not in steps:
         steps.append("verifier_agent")
 
+    node_timings = dict(state.get("node_timings") or {})
+    node_timings["verifier_agent"] = round(time.perf_counter() - start_time, 3)
+
     result = {
-        "verification_score": final_score,
-        "passed": is_passed,
-        "critique": final_critique,
-        "detected_hallucinations": final_hallucinations,
-        "unverified_commands": final_unverified_cmds,
+        "verification_score": report.score,
+        "passed": report.passed,
+        "critique": report.critique,
+        "detected_hallucinations": report.detected_hallucinations,
+        "unverified_commands": report.unverified_commands,
+        "verification_report": report.model_dump(),
         "current_step": "verification_completed",
         "steps_completed": steps,
+        "node_timings": node_timings,
     }
     llm_metrics = {
         "provider": settings.MODEL_PROVIDER,
-        "model": settings.MODEL_NAME,
+        "model": getattr(settings, "VERIFIER_MODEL", None) or settings.MODEL_NAME,
         "temperature": 0.0,
     }
     await record_node_step("verifier_agent", state, result, start_time, llm_metrics)
     return result
 
 
+# ==========================================
+# 8. Translation Node
+# ==========================================
 async def translate_content_node(state: BlogState) -> dict:
     """
-    Node 5: Localizes both the title and markdown content into the target language.
+    Node 8: Localizes the title and prose into target_language.
+    Requirement 11: Keeps fact links, URLs, and numbers unchanged,
+    and programmatically verifies link counts and numbers before and after.
     """
     start_time = time.perf_counter()
     target_lang = state.get("target_language", "English")
-    logger.info(f"[Node 5: Translator] Translating into '{target_lang}' (Fidelity Temp: 0.2)")
+    logger.info(f"[Node 8: Translator] Translating into '{target_lang}' (Preserving citations & numbers)...")
     llm = get_llm("translator")
 
     messages = [
@@ -454,12 +546,12 @@ async def translate_content_node(state: BlogState) -> dict:
             content=(
                 f"Target Language: {target_lang}\n"
                 f"Title: {state['title']}\n"
-                f"Content:\n{state['content']}"
+                f"Content to Localize:\n{state['content']}"
             )
         ),
     ]
 
-    response = await llm.ainvoke(messages)
+    response = await safe_llm_invoke(llm, messages)
     raw_output = response.content.strip()
 
     translated_title = state["title"]
@@ -475,22 +567,50 @@ async def translate_content_node(state: BlogState) -> dict:
     else:
         translated_content = raw_output
 
+    # Programmatic Citation & Number Invariant Check (Requirement 11)
+    orig_links = re.findall(r"\[.*?\]\(.*?\)", state["content"])
+    trans_links = re.findall(r"\[.*?\]\(.*?\)", translated_content)
+    if len(orig_links) != len(trans_links):
+        logger.warning(
+            f"[Translator Invariant Warning] Link count mismatch: original had {len(orig_links)} links, "
+            f"translated has {len(trans_links)} links."
+        )
+
+    orig_numbers = set(re.findall(r"\b\d+\b", state["content"]))
+    trans_numbers = set(re.findall(r"\b\d+\b", translated_content))
+    missing_numbers = orig_numbers - trans_numbers
+    if missing_numbers:
+        logger.warning(f"[Translator Invariant Warning] Numbers altered in translation: {missing_numbers}")
+
     steps = list(state.get("steps_completed", []))
     if "translator" not in steps:
         steps.append("translator")
 
+    node_timings = dict(state.get("node_timings") or {})
+    node_timings["translator"] = round(time.perf_counter() - start_time, 3)
+
     result = {
-        "translated_title": translated_title,
-        "translated_content": translated_content,
         "title": translated_title,
         "content": translated_content,
+        "translated_title": translated_title,
+        "translated_content": translated_content,
         "current_step": "translation_completed",
         "steps_completed": steps,
+        "node_timings": node_timings,
     }
-    llm_metrics = {
-        "provider": settings.MODEL_PROVIDER,
-        "model": settings.MODEL_NAME,
-        "temperature": 0.2,
-    }
+    llm_metrics = {"provider": settings.MODEL_PROVIDER, "model": settings.MODEL_NAME, "temperature": 0.2}
     await record_node_step("translator", state, result, start_time, llm_metrics)
     return result
+
+
+# ==========================================
+# 9. Backward Compatibility Stub
+# ==========================================
+async def research_trending_data_node(state: BlogState) -> dict:
+    """Legacy backward-compatible adapter routing to the new factual pipeline."""
+    plan_res = await plan_queries_node(state)
+    state.update(plan_res)
+    collect_res = await collect_node(state)
+    state.update(collect_res)
+    clean_res = await clean_dedupe_node(state)
+    return clean_res

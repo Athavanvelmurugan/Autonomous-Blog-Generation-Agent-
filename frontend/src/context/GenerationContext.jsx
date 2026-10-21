@@ -32,7 +32,7 @@ export function GenerationProvider({ children }) {
     setIsGenerating(true);
     isGeneratingRef.current = true;
     setGenerationError(null);
-    setCurrentStep('research_agent');
+    setCurrentStep('plan_queries');
     setStepsCompleted([]);
     setLiveTelemetry('Initializing LangGraph Multi-Agent execution pipeline...');
     setRevisionCount(0);
@@ -83,7 +83,10 @@ export function GenerationProvider({ children }) {
           } else if (event.type === 'complete') {
             const finalBlog = event.blog;
             const finalSteps = finalBlog.steps_completed || [
-              'research_agent',
+              'plan_queries',
+              'collect',
+              'clean_dedupe',
+              'extract_facts',
               'title_generator',
               'content_generator',
               'verifier_agent',
@@ -116,7 +119,7 @@ export function GenerationProvider({ children }) {
               onCompleteNavigate(finalBlog);
             }
           } else if (event.type === 'error') {
-            const errDetail = event.detail || 'Pipeline execution error';
+            const errDetail = event.detail || event.message || 'Pipeline execution error';
             setGenerationError(errDetail);
             setIsGenerating(false);
             isGeneratingRef.current = false;

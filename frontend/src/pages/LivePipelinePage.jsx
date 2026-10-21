@@ -38,24 +38,39 @@ export default function LivePipelinePage() {
 
   const stages = [
     {
-      id: 'research_agent',
-      title: 'Trend Research Agent',
-      desc: 'Live web scraping & grounding citations',
+      id: 'plan_queries',
+      title: 'Plan Queries',
+      desc: 'Temporal keyword & query planning',
+    },
+    {
+      id: 'collect',
+      title: 'Multi-Source Collect',
+      desc: 'Parallel Search, RSS & HN ingestion',
+    },
+    {
+      id: 'clean_dedupe',
+      title: 'Clean & Dedupe',
+      desc: 'URL normalization & min-sources gate',
+    },
+    {
+      id: 'extract_facts',
+      title: 'Fact Extraction',
+      desc: 'Atomic facts with verified evidence',
     },
     {
       id: 'title_generator',
-      title: 'Title Generator Node',
-      desc: 'SEO headline grounded in facts',
+      title: 'Title Generator',
+      desc: 'Fact-grounded SEO headline',
     },
     {
       id: 'content_generator',
-      title: revisionCount > 0 ? `Writer (Revision #${revisionCount})` : 'Content Generator Node',
-      desc: revisionCount > 0 ? 'Refining draft against verifier audit' : 'Comprehensive Markdown drafting',
+      title: revisionCount > 0 ? `Writer (Revision #${revisionCount})` : 'Factual Writer',
+      desc: revisionCount > 0 ? 'Refining draft against verifier audit' : 'Cited facts-only Markdown drafting',
     },
     {
       id: 'verifier_agent',
-      title: 'Fact Verifier & Auditor',
-      desc: 'Hallucination check & command linter',
+      title: 'Fact Verifier',
+      desc: 'Deterministic checks & semantic audit',
     },
     ...(needsTranslation
       ? [

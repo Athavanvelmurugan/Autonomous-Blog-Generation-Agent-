@@ -1,0 +1,64 @@
+# Pluggable RSS and External Sources by Category
+# HN and arXiv are enabled ONLY for tech and ai categories
+
+categories:
+  tech:
+    use_hacker_news: true
+    use_arxiv: true
+    rss_feeds:
+      - name: "TechCrunch"
+        url: "https://techcrunch.com/feed/"
+        timeout: 6.0
+      - name: "The Verge"
+        url: "https://www.theverge.com/rss/index.xml"
+        timeout: 6.0
+      - name: "ArXiv Computer Science"
+        url: "http://export.arxiv.org/rss/cs"
+        timeout: 8.0
+
+  ai:
+    use_hacker_news: true
+    use_arxiv: true
+    rss_feeds:
+      - name: "ArXiv Artificial Intelligence"
+        url: "http://export.arxiv.org/rss/cs.AI"
+        timeout: 8.0
+      - name: "MIT Technology Review AI"
+        url: "https://www.technologyreview.com/feed/"
+        timeout: 6.0
+      - name: "VentureBeat AI"
+        url: "https://venturebeat.com/category/ai/feed/"
+        timeout: 6.0
+
+  health:
+    use_hacker_news: false
+    use_arxiv: false
+    rss_feeds:
+      - name: "Medical News Today"
+        url: "https://www.medicalnewstoday.com/feed"
+        timeout: 6.0
+      - name: "WHO News"
+        url: "https://www.who.int/rss-feeds/news-english.xml"
+        timeout: 6.0
+
+  finance:
+    use_hacker_news: false
+    use_arxiv: false
+    rss_feeds:
+      - name: "CNBC Finance"
+        url: "https://www.cnbc.com/id/10000664/device/rss/rss.html"
+        timeout: 6.0
+      - name: "MarketWatch"
+        url: "https://feeds.content.dowjones.io/public/rss/mw_topstories"
+        timeout: 6.0
+
+  general:
+    use_hacker_news: false
+    use_arxiv: false
+    rss_feeds:
+      - name: "BBC News World"
+        url: "https://feeds.bbci.co.uk/news/world/rss.xml"
+        timeout: 6.0
+      - name: "NPR News"
+        url: "https://feeds.npr.org/1001/rss.xml"
+        timeout: 6.0

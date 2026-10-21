@@ -83,9 +83,10 @@ async def record_node_step(
                 )
 
             # 4. Domain-specific telemetry
-            if node_name == "research_agent" and step_output.get("sources"):
+            if node_name in ["clean_dedupe", "research_agent"] and (step_output.get("deduped_sources") or step_output.get("sources")):
+                srcs = step_output.get("deduped_sources") or step_output.get("sources")
                 await telemetry_repo.batch_record_sources(
-                    sources=step_output["sources"],
+                    sources=srcs,
                     run_id=run.id,
                 )
 

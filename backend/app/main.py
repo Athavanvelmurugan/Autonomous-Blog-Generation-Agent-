@@ -143,22 +143,34 @@ async def generate_blog(
         "tone": request.tone or "Informative",
         "target_language": request.target_language or "English",
         "creativity": request.creativity or "balanced",
-        "research_data": None,
+        "planned_queries": [],
+        "query_retry_count": 0,
+        "raw_sources": [],
+        "deduped_sources": [],
         "sources": [],
+        "facts": [],
+        "today_date": None,
+        "topic_type": None,
+        "category": None,
+        "research_data": None,
         "title": "",
         "content": "",
+        "sources_section": None,
         "verification_score": None,
         "passed": None,
         "critique": None,
         "detected_hallucinations": [],
         "unverified_commands": [],
+        "verification_report": None,
         "revision_count": 0,
+        "review_fallback_action": None,
         "original_title": None,
         "original_content": None,
         "translated_title": None,
         "translated_content": None,
         "current_step": "started",
         "steps_completed": [],
+        "node_timings": {},
         "error": None,
         "run_id": None,
         "idempotency_key": idempotency_key,
@@ -173,8 +185,22 @@ async def generate_blog(
             initial_state,
             config={"configurable": {"thread_id": thread_id}}
         )
-        execution_time = round(time.perf_counter() - start_time, 2)
 
+        # Check for explicit failure path (e.g. insufficient sources or verification halt)
+        if final_state.get("error") or final_state.get("current_step") == "failed":
+            err_msg = final_state.get("error") or "Pipeline halted: requirements not met."
+            logger.warning(f"Blog generation aborted: {err_msg}")
+            if "insufficient" in err_msg.lower():
+                raise HTTPException(
+                    status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+                    detail=err_msg
+                )
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail=err_msg
+            )
+
+        execution_time = round(time.perf_counter() - start_time, 2)
         verif_score = final_state.get("verification_score") or 8.5
         critique_text = final_state.get("critique")
         retrieved_sources = final_state.get("sources", [])
@@ -217,6 +243,8 @@ async def generate_blog(
             steps_completed=final_state.get("steps_completed", []),
         )
 
+    except HTTPException:
+        raise
     except Exception as e:
         logger.error(f"Error during blog generation pipeline: {e}", exc_info=True)
         raise HTTPException(
@@ -246,22 +274,34 @@ async def generate_blog_stream(
         "tone": request.tone or "Informative",
         "target_language": request.target_language or "English",
         "creativity": request.creativity or "balanced",
+        "topic_type": None,
+        "category": None,
+        "today_date": None,
+        "planned_queries": [],
+        "query_retry_count": 0,
+        "raw_sources": [],
+        "deduped_sources": [],
+        "facts": [],
         "research_data": None,
         "sources": [],
         "title": "",
         "content": "",
+        "sources_section": None,
         "verification_score": None,
         "passed": None,
         "critique": None,
         "detected_hallucinations": [],
         "unverified_commands": [],
+        "verification_report": None,
         "revision_count": 0,
+        "review_fallback_action": None,
         "original_title": None,
         "original_content": None,
         "translated_title": None,
         "translated_content": None,
         "current_step": "started",
         "steps_completed": [],
+        "node_timings": {},
         "error": None,
         "run_id": None,
         "idempotency_key": idempotency_key,
@@ -272,7 +312,7 @@ async def generate_blog_stream(
     async def event_generator():
         accumulated_state = dict(initial_state)
         try:
-            yield f"data: {json.dumps({'type': 'step_start', 'node': 'research_agent', 'message': 'Gathering live ground-truth facts...'})}\n\n"
+            yield f"data: {json.dumps({'type': 'step_start', 'node': 'plan_queries', 'message': 'Planning search queries and temporal keywords...'})}\n\n"
             
             app_graph = get_graph()
             async for output in app_graph.astream(
@@ -292,14 +332,24 @@ async def generate_blog_stream(
                         "revision_count": accumulated_state.get("revision_count", 0),
                     }
                     
-                    if node_name == "research_agent":
-                        event_data["sources"] = node_update.get("sources", [])
-                        event_data["message"] = f"Retrieved {len(node_update.get('sources', []))} verified sources."
+                    if node_name == "plan_queries":
+                        event_data["message"] = f"Generated {len(node_update.get('planned_queries', []))} search queries (Type: {node_update.get('topic_type', 'trending')})."
+                    elif node_name == "collect":
+                        event_data["message"] = f"Ingested candidate articles across multi-sources."
+                    elif node_name == "clean_dedupe":
+                        sources = node_update.get("deduped_sources", [])
+                        domains = len({s.get('domain') for s in sources if s.get('domain')})
+                        event_data["sources"] = sources
+                        event_data["message"] = f"Deduplicated to {len(sources)} verified sources across {domains} domains."
+                    elif node_name == "extract_facts":
+                        facts = node_update.get("facts", [])
+                        event_data["facts"] = facts
+                        event_data["message"] = f"Extracted and verified {len(facts)} atomic facts with verbatim evidence."
                     elif node_name == "title_generator":
                         event_data["title"] = node_update.get("title")
                         event_data["message"] = f"Headline generated: {node_update.get('title')}"
                     elif node_name == "content_generator":
-                        event_data["message"] = f"Blog draft generated ({len(node_update.get('content', '').split())} words)."
+                        event_data["message"] = f"Blog draft synthesized ({len(node_update.get('content', '').split())} words) with inline citations."
                         event_data["content_preview"] = node_update.get("content", "")[:300]
                     elif node_name == "verifier_agent":
                         score = node_update.get("verification_score")
@@ -307,14 +357,24 @@ async def generate_blog_stream(
                         event_data["verification_score"] = score
                         event_data["passed"] = passed
                         event_data["critique"] = node_update.get("critique")
-                        event_data["detected_hallucinations"] = node_update.get("detected_hallucinations", [])
-                        event_data["unverified_commands"] = node_update.get("unverified_commands", [])
                         status_str = "PASSED" if passed else "REVISING"
-                        event_data["message"] = f"Fact-check audit {status_str}: {score}/10."
+                        event_data["message"] = f"Verification {status_str}: {score}/10."
                     elif node_name == "translator":
                         event_data["message"] = f"Localized into {request.target_language}."
+                    elif node_name == "fail_node":
+                        event_data["type"] = "error"
+                        err_text = node_update.get("error", "Pipeline terminated due to quality constraints.")
+                        event_data["detail"] = err_text
+                        event_data["message"] = err_text
                     
                     yield f"data: {json.dumps(event_data)}\n\n"
+
+            # Check if workflow aborted due to error
+            if accumulated_state.get("error") or accumulated_state.get("current_step") == "failed":
+                err_msg = accumulated_state.get("error") or "Pipeline halted: requirements not met."
+                logger.warning(f"[SSE Stream] Pipeline terminated with error: {err_msg}")
+                yield f"data: {json.dumps({'type': 'error', 'detail': err_msg})}\n\n"
+                return
 
             # Workflow completed: persist via BlogRepository and emit final event
             execution_time = round(time.perf_counter() - start_time, 2)

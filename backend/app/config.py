@@ -19,12 +19,23 @@ class Settings(BaseSettings):
 
     # General LLM Settings
     MODEL_PROVIDER: str = "groq"
-    MODEL_NAME: str = "openai/gpt-oss-120b"
+    MODEL_NAME: str = "openai/gpt-oss-20b"
     MODEL_TEMPERATURE: float = 0.7
 
     # API Keys
     GROQ_API_KEY: Optional[str] = None
     OPENAI_API_KEY: Optional[str] = None
+    TAVILY_API_KEY: Optional[str] = None
+
+    # Verifier & Fallback Settings
+    VERIFIER_MODEL: Optional[str] = None
+    REVIEW_FALLBACK: str = "fail"  # "fail" | "flag"
+
+    # Research & Search Controls
+    MIN_SOURCES_REQUIRED: int = 3
+    SEARCH_TIMEOUT_SECONDS: float = 10.0
+    SEARCH_CACHE_TTL_HOURS: int = 24
+    GROQ_CONCURRENCY_LIMIT: int = 4
 
     # PostgreSQL Database
     DB_USER: str = "postgres"

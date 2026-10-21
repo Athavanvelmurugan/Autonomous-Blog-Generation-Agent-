@@ -1,42 +1,91 @@
 import logging
 from backend.app.schema.state_schema import BlogState
+from backend.app.config import get_settings
 
 logger = logging.getLogger(__name__)
 
 
+def source_gate_router(state: BlogState) -> str:
+    """
+    Evaluates whether the clean_dedupe node satisfied the minimum-sources rule:
+    - >= MIN_SOURCES_REQUIRED distinct sources (default 3)
+    - >= 2 distinct domains
+    
+    If not met:
+    - Retries plan_queries with different/broader search queries (up to 2 retries)
+    - If retries exhausted: routes to fail_insufficient_sources (raising HTTP 422, zero LLM fallback)
+    """
+    settings = get_settings()
+    min_sources = settings.MIN_SOURCES_REQUIRED
+    deduped = state.get("deduped_sources", [])
+    distinct_domains = {s.get("domain") for s in deduped if s.get("domain")}
+    retry_count = state.get("query_retry_count", 0)
+    has_error = bool(state.get("error"))
+
+    is_sufficient = len(deduped) >= min_sources and len(distinct_domains) >= 2 and not has_error
+
+    if is_sufficient:
+        logger.info(
+            f"[Source Gate Router] Ground truth SATISFIED: {len(deduped)} sources across "
+            f"{len(distinct_domains)} domains. Proceeding to Fact Extraction."
+        )
+        return "extract_facts"
+
+    # Retry path if under max 2 retries (0 -> retry 1, 1 -> retry 2, 2 -> exhausted)
+    if retry_count < 2:
+        logger.warning(
+            f"[Source Gate Router] Insufficient sources ({len(deduped)} sources, {len(distinct_domains)} domains). "
+            f"Triggering query replanning retry #{retry_count + 1}..."
+        )
+        return "plan_queries"
+
+    logger.error(
+        f"[Source Gate Router] Insufficient sources after {retry_count} retries "
+        f"({len(deduped)} sources, {len(distinct_domains)} domains). Halting pipeline."
+    )
+    return "fail_insufficient_sources"
+
+
 def verification_router(state: BlogState) -> str:
     """
-    Evaluates whether the blog post passes factual verification and quality standards.
-    If the post failed verification (score < 8.0 or hallucinations present) and revisions < 2,
-    it loops back to content_generator with targeted critique.
-    
-    Returns:
-        'revise': if passed is False (or score < 8.0) and revision_count < 2
-        'passed': if passed is True or maximum revisions reached
+    Evaluates verification outcome:
+    - If passed -> routes to language check or end.
+    - If failed and revision_count < 2 -> loops back to writer ('write').
+    - If failed and revision_count >= 2 -> applies REVIEW_FALLBACK ('fail' or 'flag').
     """
-    score = state.get("verification_score", 8.5)
-    revisions = state.get("revision_count", 0)
+    settings = get_settings()
     passed = state.get("passed", True)
-    hallucinations = state.get("detected_hallucinations", [])
-    
-    if (not passed or (score is not None and score < 7.5) or len(hallucinations) > 0) and revisions < 2:
+    revisions = state.get("revision_count", 0)
+    score = state.get("verification_score", 10.0)
+
+    if passed:
+        logger.info(f"[Verification Router] Article passed audit (Score: {score}/10).")
+        return "passed"
+
+    if revisions < 2:
         logger.warning(
-            f"[Verification Router] Validation FAILED (Score: {score}/10, Hallucinations: {len(hallucinations)}) -> "
-            f"Routing to Content Generator for Revision #{revisions}"
+            f"[Verification Router] Verification FAILED (Score: {score}/10, Revision #{revisions}) -> "
+            f"Routing to Writer for revision..."
         )
         return "revise"
-    
-    logger.info(f"[Verification Router] Validation PASSED (Score: {score}/10, Revisions: {revisions}) -> Proceeding to Language Router")
-    return "passed"
+
+    # Max revisions reached (2 revisions completed)
+    fallback = getattr(settings, "REVIEW_FALLBACK", "fail").lower().strip()
+    if fallback == "flag":
+        logger.warning(
+            f"[Verification Router] Max revisions reached. Flagging article with status 'needs_review'."
+        )
+        return "flag_review"
+    else:
+        logger.error(
+            f"[Verification Router] Max revisions reached (Score: {score}/10). Halting pipeline with failure."
+        )
+        return "fail_verification"
 
 
 def language_router(state: BlogState) -> str:
     """
     Conditional edge evaluator for multi-language workflow routing.
-    
-    Returns:
-        'translate': when a non-English language is specified.
-        'end': when the target language is English or empty.
     """
     target = state.get("target_language", "").strip().lower()
     

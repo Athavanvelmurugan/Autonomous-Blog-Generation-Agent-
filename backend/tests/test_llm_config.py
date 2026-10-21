@@ -24,18 +24,24 @@ class TestLLMConfigAndFactory(unittest.TestCase):
             configs = build_node_configs()
 
             self.assertEqual(configs["verifier_agent"].temperature, 0.0)
-            self.assertEqual(configs["verifier_agent"].max_tokens, 1024)
+            self.assertEqual(configs["verifier_agent"].max_tokens, 1500)
 
-            self.assertEqual(configs["research_agent"].temperature, 0.1)
+            self.assertEqual(configs["research_agent"].temperature, 0.0)
             self.assertEqual(configs["research_agent"].max_tokens, 512)
+
+            self.assertEqual(configs["plan_queries"].temperature, 0.0)
+            self.assertEqual(configs["plan_queries"].max_tokens, 512)
+
+            self.assertEqual(configs["extract_facts"].temperature, 0.0)
+            self.assertEqual(configs["extract_facts"].max_tokens, 2048)
 
             self.assertEqual(configs["translator"].temperature, 0.2)
             self.assertEqual(configs["translator"].max_tokens, 4096)
 
-            self.assertEqual(configs["content_generator"].temperature, 0.4)
+            self.assertEqual(configs["content_generator"].temperature, 0.35)
             self.assertEqual(configs["content_generator"].max_tokens, 4096)
 
-            self.assertEqual(configs["title_generator"].temperature, 0.65)
+            self.assertEqual(configs["title_generator"].temperature, 0.5)
             self.assertEqual(configs["title_generator"].max_tokens, 150)
 
     def test_node_aliases(self):
@@ -123,15 +129,15 @@ class TestLLMConfigAndFactory(unittest.TestCase):
             with patch("backend.app.core.llm_factory._create_cached_llm") as mock_create:
                 mock_create.return_value = MagicMock()
 
-                # 1. Writing node with 'low' creativity -> 0.4 - 0.1 = 0.3
+                # 1. Writing node with 'low' creativity -> 0.35 - 0.1 = 0.25
                 get_node_llm("content_generator", creativity_level="low")
                 _, kwargs = mock_create.call_args
-                self.assertEqual(kwargs["temperature"], 0.3)
+                self.assertEqual(kwargs["temperature"], 0.25)
 
-                # 2. Writing node with 'high' creativity -> 0.4 + 0.1 = 0.5
+                # 2. Writing node with 'high' creativity -> 0.35 + 0.1 = 0.45
                 get_node_llm("content_generator", creativity_level="high")
                 _, kwargs = mock_create.call_args
-                self.assertEqual(kwargs["temperature"], 0.5)
+                self.assertEqual(kwargs["temperature"], 0.45)
 
                 # 3. Verifier node with 'high' creativity -> MUST REMAIN 0.0
                 get_node_llm("verifier_agent", creativity_level="high")
@@ -141,19 +147,19 @@ class TestLLMConfigAndFactory(unittest.TestCase):
     def test_verifier_loop_temperature_step_down(self):
         """Simulate verifier retry loop to verify temperature steps down by 0.1 per revision."""
         writer_cfg = get_node_config("content_generator")
-        base_temp = writer_cfg.temperature  # 0.4
+        base_temp = writer_cfg.temperature  # 0.35
 
         # Revision 0 (Initial draft)
         rev0_temp = max(0.1, round(base_temp - (0.1 * 0), 2))
-        self.assertEqual(rev0_temp, 0.4)
+        self.assertEqual(rev0_temp, 0.35)
 
         # Revision 1 (After 1st rejection)
         rev1_temp = max(0.1, round(base_temp - (0.1 * 1), 2))
-        self.assertEqual(rev1_temp, 0.3)
+        self.assertEqual(rev1_temp, 0.25)
 
         # Revision 2 (After 2nd rejection)
         rev2_temp = max(0.1, round(base_temp - (0.1 * 2), 2))
-        self.assertEqual(rev2_temp, 0.2)
+        self.assertEqual(rev2_temp, 0.15)
 
         # Lower bound test (never drop below 0.1)
         rev5_temp = max(0.1, round(base_temp - (0.1 * 5), 2))
