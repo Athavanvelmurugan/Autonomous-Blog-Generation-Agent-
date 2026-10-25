@@ -62,10 +62,18 @@ async def ensure_database_exists():
 
 async def init_db():
     """
-    Verifies database connectivity on application startup.
-    Schema migrations are managed strictly through Alembic.
+    Verifies database connectivity on application startup and ensures word count columns exist.
     """
     await ensure_database_exists()
+    try:
+        from sqlalchemy import text
+        async with engine.begin() as conn:
+            await conn.execute(text("ALTER TABLE blog_versions ADD COLUMN IF NOT EXISTS target_word_count INTEGER DEFAULT 800;"))
+            await conn.execute(text("ALTER TABLE blog_versions ADD COLUMN IF NOT EXISTS word_count INTEGER DEFAULT 0;"))
+            await conn.execute(text("ALTER TABLE blog_posts ADD COLUMN IF NOT EXISTS target_word_count INTEGER DEFAULT 800;"))
+            await conn.execute(text("ALTER TABLE blog_posts ADD COLUMN IF NOT EXISTS word_count INTEGER DEFAULT 0;"))
+    except Exception as e:
+        logger.warning(f"Could not auto-migrate word count columns: {e}")
     logger.info("PostgreSQL database connection verified.")
 
 

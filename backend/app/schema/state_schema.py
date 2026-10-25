@@ -80,6 +80,8 @@ class BlogState(TypedDict):
     topic: str
     tone: str
     target_language: str
+    target_word_count: Optional[int]
+    word_count: Optional[int]
     creativity: Optional[str]
     
     # Topic metadata

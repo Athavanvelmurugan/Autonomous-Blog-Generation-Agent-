@@ -730,6 +730,34 @@ body.focus-mode-active .toc-desktop-sidebar {
   animation: fadeIn var(--transition-normal) ease-out forwards;
 }
 
+/* Studio Generator Layout */
+.studio-grid-layout {
+  display: grid;
+  grid-template-columns: minmax(0, 1.4fr) minmax(320px, 1fr);
+  gap: var(--space-6);
+  align-items: start;
+}
+
+@media (max-width: 960px) {
+  .studio-grid-layout {
+    grid-template-columns: 1fr;
+  }
+}
+
+.studio-prompt-card {
+  position: relative;
+  background: var(--bg-surface);
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius-lg);
+  box-shadow: var(--shadow-sm);
+  transition: border-color var(--transition-fast), box-shadow var(--transition-fast);
+}
+
+.studio-prompt-card:focus-within {
+  border-color: var(--accent-primary);
+  box-shadow: 0 0 0 3px var(--accent-primary-subtle);
+}
+
 @media (prefers-reduced-motion: reduce) {
   *, ::before, ::after {
     animation-duration: 0.01ms !important;
@@ -738,3 +766,4 @@ body.focus-mode-active .toc-desktop-sidebar {
     scroll-behavior: auto !important;
   }
 }
+

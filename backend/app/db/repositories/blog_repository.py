@@ -99,6 +99,8 @@ class BlogRepository:
         original_content: Optional[str] = None,
         execution_time_seconds: float = 0.0,
         steps_completed: Optional[List[str]] = None,
+        target_word_count: Optional[int] = 800,
+        word_count: Optional[int] = None,
     ) -> Blog:
         """
         Atomically creates a new Blog, its BlogVersion 1, and associated sources.
@@ -124,6 +126,8 @@ class BlogRepository:
             content=content,
             original_title=original_title,
             original_content=original_content,
+            target_word_count=target_word_count or 800,
+            word_count=word_count or len(content.split()),
             verification_score=verification_score or 8.5,
             critique=critique,
             execution_time_seconds=execution_time_seconds,
@@ -155,6 +159,8 @@ class BlogRepository:
                 topic=topic,
                 tone=tone,
                 target_language=target_language,
+                target_word_count=target_word_count or 800,
+                word_count=word_count or len(content.split()),
                 title=title,
                 content=content,
                 verification_score=verification_score or 8.5,

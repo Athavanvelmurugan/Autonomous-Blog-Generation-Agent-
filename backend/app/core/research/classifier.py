@@ -49,13 +49,12 @@ def classify_topic(topic: str) -> Dict[str, str]:
     has_trending_kw = any(w in t_lower for w in TRENDING_INDICATORS)
     has_evergreen_kw = any(w in t_lower for w in EVERGREEN_INDICATORS)
 
-    if has_evergreen_kw and not has_trending_kw:
-        topic_type = "evergreen"
-    elif has_trending_kw:
+    if has_trending_kw:
         topic_type = "trending"
     else:
-        # Default to trending to ensure timely real-world data
-        topic_type = "trending"
+        # Default to evergreen for conceptual, lifestyle, humanities, and general topics
+        # Only explicitly time-sensitive topics (with year/news keywords) are trending
+        topic_type = "evergreen"
 
     logger.info(f"[Classifier] Topic: '{topic[:40]}...' -> Type: {topic_type}, Category: {category}")
     return {

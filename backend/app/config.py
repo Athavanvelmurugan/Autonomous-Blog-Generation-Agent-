@@ -29,10 +29,11 @@ class Settings(BaseSettings):
 
     # Verifier & Fallback Settings
     VERIFIER_MODEL: Optional[str] = None
-    REVIEW_FALLBACK: str = "fail"  # "fail" | "flag"
+    REVIEW_FALLBACK: str = "flag"  # "fail" | "flag"
 
     # Research & Search Controls
-    MIN_SOURCES_REQUIRED: int = 3
+    MIN_SOURCES_REQUIRED: int = 2
+    MIN_FACTS_REQUIRED: int = 2
     SEARCH_TIMEOUT_SECONDS: float = 10.0
     SEARCH_CACHE_TTL_HOURS: int = 24
     GROQ_CONCURRENCY_LIMIT: int = 4

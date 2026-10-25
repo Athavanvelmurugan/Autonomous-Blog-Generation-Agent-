@@ -19,23 +19,24 @@ export const fetchSupportedLanguages = async () => {
   return response.data;
 };
 
-export const generateBlog = async ({ topic, tone, target_language }) => {
+export const generateBlog = async ({ topic, tone, target_language, word_count }) => {
   const response = await client.post(`${API_BASE}/generate-blog`, {
     topic,
     tone,
     target_language,
+    word_count,
   });
   return response.data;
 };
 
-export const generateBlogStream = async ({ topic, tone, target_language }, onEvent, onError) => {
+export const generateBlogStream = async ({ topic, tone, target_language, word_count }, onEvent, onError) => {
   try {
     const response = await fetch(`${API_BASE}/generate-blog/stream`, {
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',
       },
-      body: JSON.stringify({ topic, tone, target_language }),
+      body: JSON.stringify({ topic, tone, target_language, word_count }),
     });
 
     if (!response.ok) {

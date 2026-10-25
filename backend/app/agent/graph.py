@@ -65,10 +65,13 @@ workflow.add_conditional_edges(
     },
 )
 
-# Conditional Edge 2: Fact Gatekeeper (Never proceed to write with insufficient verified facts)
+# Conditional Edge 2: Fact Gatekeeper (Proceed to write if verified facts or research sources are present)
 def fact_gate_router(state: BlogState) -> str:
     facts = state.get("facts") or []
-    if len(facts) < 3 or state.get("error"):
+    sources = state.get("deduped_sources") or state.get("sources") or []
+    if len(facts) >= 1 or len(sources) >= 1:
+        return "title_generator"
+    if state.get("error"):
         return "fail"
     return "title_generator"
 

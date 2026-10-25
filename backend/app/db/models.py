@@ -46,6 +46,10 @@ class BlogPost(Base):
     original_title = Column(Text, nullable=True)
     original_content = Column(Text, nullable=True)
 
+    # Target & Actual Word Count
+    target_word_count = Column(Integer, default=800)
+    word_count = Column(Integer, default=0)
+
     execution_time_seconds = Column(Float, default=0.0)
     steps_completed_json = Column(Text, default="[]")
     created_at = Column(DateTime(timezone=True), default=lambda: datetime.now(timezone.utc))
@@ -78,6 +82,8 @@ class BlogPost(Base):
             "topic": self.topic,
             "tone": self.tone,
             "target_language": self.target_language,
+            "target_word_count": self.target_word_count,
+            "word_count": self.word_count,
             "title": self.title,
             "content": self.content,
             "verification_score": self.verification_score,
@@ -170,6 +176,8 @@ class Blog(Base):
             "topic": self.topic,
             "tone": self.tone,
             "target_language": self.target_language,
+            "target_word_count": latest.target_word_count if latest and hasattr(latest, "target_word_count") else 800,
+            "word_count": latest.word_count if latest and hasattr(latest, "word_count") else 0,
             "title": latest.title if latest else "",
             "content": latest.content if latest else "",
             "verification_score": latest.verification_score if latest else 8.5,
@@ -192,6 +200,8 @@ class BlogVersion(Base):
     content = Column(Text, nullable=False)
     original_title = Column(Text, nullable=True)
     original_content = Column(Text, nullable=True)
+    target_word_count = Column(Integer, nullable=True, default=800)
+    word_count = Column(Integer, nullable=True, default=0)
     verification_score = Column(Float, nullable=True, default=8.5)
     critique = Column(Text, nullable=True)
     execution_time_seconds = Column(Float, default=0.0)

@@ -1,28 +1,69 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { useGeneration } from '../context/GenerationContext';
 import { fetchSupportedLanguages } from '../services/api';
-import { Card, CardHeader, CardTitle, CardDescription, CardContent, CardFooter } from '../components/common/Card';
+import { Card, CardHeader, CardTitle, CardDescription, CardContent } from '../components/common/Card';
 import Button from '../components/common/Button';
-import Badge from '../components/common/Badge';
-import { Sparkles, Globe, Layers, BookOpen, ArrowRight, Check } from 'lucide-react';
+import CustomSelect from '../components/common/CustomSelect';
+import LengthDropdown from '../components/common/LengthDropdown';
+import {
+  Sparkles,
+  Globe,
+  Layers,
+  ArrowRight,
+  Check,
+  FileText,
+  Sliders,
+  Cpu,
+  BookOpen,
+  MessageSquare,
+  Briefcase,
+  ShieldCheck,
+  Search,
+  CheckCircle2,
+  X,
+  Command,
+} from 'lucide-react';
 
-const PRESET_TOPICS = [
-  'Autonomous Agentic AI in 2026: Trends and Paradigms',
-  'Mastering Directed Acyclic Graphs (DAG) in LangGraph',
-  'High-Performance Async REST APIs with FastAPI & PostgreSQL',
-  'Vector Databases vs Relational DBs for Production RAG',
+const SUGGESTION_TOPICS = [
+  { label: 'Agentic AI 2026', text: 'Autonomous Agentic AI in 2026: Trends, Reasoning Paradigms, and Multi-Agent Orchestration' },
+  { label: 'LangGraph DAGs', text: 'Mastering Directed Acyclic Graphs (DAG) in LangGraph with Dynamic Routing' },
+  { label: 'FastAPI & Postgres', text: 'High-Performance Async REST APIs with FastAPI, Asyncpg, and PostgreSQL' },
+  { label: 'Human Psychology', text: 'Understanding One-Sided Love: Psychological Depth, Emotional Realities, and Moving Forward' },
+  { label: 'Production RAG', text: 'Vector Databases vs Relational DBs for Production RAG Pipelines' },
 ];
 
 const TONES = [
-  { id: 'Informative', label: 'Informative', desc: 'Balanced, educational, and accessible' },
-  { id: 'Technical', label: 'Technical', desc: 'In-depth architecture, code, and CLI details' },
-  { id: 'Casual', label: 'Casual', desc: 'Conversational, engaging, and lighthearted' },
-  { id: 'Executive', label: 'Executive', desc: 'High-level business implications and strategy' },
+  {
+    id: 'Informative',
+    label: 'Informative',
+    desc: 'Balanced, clear, educational',
+    icon: BookOpen,
+  },
+  {
+    id: 'Technical',
+    label: 'Technical',
+    desc: 'Deep architecture & code specs',
+    icon: Cpu,
+  },
+  {
+    id: 'Casual',
+    label: 'Casual',
+    desc: 'Engaging, human & conversational',
+    icon: MessageSquare,
+  },
+  {
+    id: 'Executive',
+    label: 'Executive',
+    desc: 'High-level strategy & ROI impact',
+    icon: Briefcase,
+  },
 ];
 
 export default function GeneratePage() {
   const navigate = useNavigate();
+  const textareaRef = useRef(null);
+
   const {
     topic,
     setTopic,
@@ -30,6 +71,8 @@ export default function GeneratePage() {
     setTone,
     targetLanguage,
     setTargetLanguage,
+    wordCount,
+    setWordCount,
     isGenerating,
     startGeneration,
   } = useGeneration();
@@ -44,7 +87,7 @@ export default function GeneratePage() {
         const data = await fetchSupportedLanguages();
         if (isMounted) setLanguages(data);
       } catch (err) {
-        console.warn('Could not load language registry:', err);
+        console.warn('Could not load language registry, using fallback list:', err);
         if (isMounted) {
           setLanguages([
             { code: 'en', name: 'English', native_name: 'English' },
@@ -53,6 +96,8 @@ export default function GeneratePage() {
             { code: 'de', name: 'German', native_name: 'Deutsch' },
             { code: 'hi', name: 'Hindi', native_name: 'हिन्दी' },
             { code: 'ja', name: 'Japanese', native_name: '日本語' },
+            { code: 'zh', name: 'Chinese', native_name: '中文' },
+            { code: 'ar', name: 'Arabic', native_name: 'العربية' },
           ]);
         }
       } finally {
@@ -60,219 +105,493 @@ export default function GeneratePage() {
       }
     };
     loadLangs();
-    return () => { isMounted = false; };
+    return () => {
+      isMounted = false;
+    };
   }, []);
 
+  const languageOptions = languages.map((lang) => {
+    const isDirect = lang.name.toLowerCase() === 'english';
+    return {
+      value: lang.name,
+      label: lang.name,
+      sublabel: lang.native_name !== lang.name ? lang.native_name : undefined,
+      badge: isDirect ? 'Direct' : 'Localization',
+    };
+  });
+
   const handleSubmit = (e) => {
-    e.preventDefault();
+    if (e) e.preventDefault();
     if (!topic.trim() || isGenerating) return;
 
-    startGeneration({ topic, tone, target_language: targetLanguage });
+    startGeneration({
+      topic,
+      tone,
+      target_language: targetLanguage,
+      word_count: Number(wordCount) || 800,
+    });
     navigate('/pipeline/live');
   };
 
-  return (
-    <div style={{ maxWidth: '960px', margin: '0 auto' }}>
-      <form onSubmit={handleSubmit}>
-        <Card>
-          <CardHeader>
-            <div>
-              <CardTitle>
-                <Sparkles size={20} color="var(--accent-primary-text)" />
-                <span>Configure Content Generation Agent</span>
-              </CardTitle>
-              <CardDescription>
-                Define your target topic, tone, and localization options for the autonomous LangGraph pipeline.
-              </CardDescription>
-            </div>
-          </CardHeader>
+  // Keyboard shortcut: Cmd/Ctrl + Enter to trigger generation
+  const handleKeyDown = (e) => {
+    if ((e.metaKey || e.ctrlKey) && e.key === 'Enter') {
+      e.preventDefault();
+      handleSubmit();
+    }
+  };
 
-          <CardContent style={{ display: 'flex', flexDirection: 'column', gap: 'var(--space-6)' }}>
-            {/* Topic Input */}
-            <div>
-              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 'var(--space-2)' }}>
+  const estReadTime = Math.max(1, Math.ceil((Number(wordCount) || 800) / 200));
+
+  return (
+    <div style={{ maxWidth: '1200px', margin: '0 auto', paddingBottom: 'var(--space-8)' }}>
+      {/* Studio Header */}
+      <div style={{ marginBottom: 'var(--space-6)', display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', flexWrap: 'wrap', gap: 'var(--space-3)' }}>
+        <div>
+          <h1 style={{ fontSize: 'var(--text-2xl)', fontWeight: 700, color: 'var(--text-primary)', margin: 0, display: 'flex', alignItems: 'center', gap: 'var(--space-2)' }}>
+            <Sparkles size={22} color="var(--accent-primary-text)" />
+            <span>Autonomous Blog Studio</span>
+          </h1>
+          <p style={{ fontSize: 'var(--text-sm)', color: 'var(--text-secondary)', margin: 'var(--space-1) 0 0 0' }}>
+            Configure your research directive, depth, and autonomous multi-agent pipeline parameters.
+          </p>
+        </div>
+
+        {/* Live Badge */}
+        <div style={{ display: 'flex', alignItems: 'center', gap: 'var(--space-2)' }}>
+          <span
+            style={{
+              display: 'inline-flex',
+              alignItems: 'center',
+              gap: '6px',
+              padding: '4px 10px',
+              borderRadius: 'var(--radius-full)',
+              background: 'var(--accent-primary-subtle)',
+              border: '1px solid var(--accent-primary-border)',
+              color: 'var(--accent-primary-text)',
+              fontSize: 'var(--text-xs)',
+              fontWeight: 600,
+            }}
+          >
+            <span style={{ width: '6px', height: '6px', borderRadius: '50%', background: 'var(--accent-primary)' }} />
+            LangGraph Multi-Agent Engine
+          </span>
+        </div>
+      </div>
+
+      <form onSubmit={handleSubmit}>
+        {/* Dual-Column Studio Grid Layout */}
+        <div className="studio-grid-layout">
+          {/* ========================================================= */}
+          {/* LEFT COLUMN: CREATIVE CANVAS & PROMPT DIRECTIVE */}
+          {/* ========================================================= */}
+          <div style={{ display: 'flex', flexDirection: 'column', gap: 'var(--space-5)' }}>
+            {/* Prompt Editor Box */}
+            <div className="studio-prompt-card" style={{ padding: 'var(--space-5)' }}>
+              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 'var(--space-3)' }}>
                 <label
                   htmlFor="blog-topic-input"
-                  style={{ fontSize: 'var(--text-sm)', fontWeight: 600, color: 'var(--text-primary)' }}
+                  style={{
+                    fontSize: 'var(--text-sm)',
+                    fontWeight: 600,
+                    color: 'var(--text-primary)',
+                    display: 'flex',
+                    alignItems: 'center',
+                    gap: 'var(--space-2)',
+                  }}
                 >
-                  Blog Topic / Primary Subject <span style={{ color: 'var(--color-danger)' }}>*</span>
+                  <span>Blog Topic or Research Subject</span>
+                  <span style={{ color: 'var(--color-danger)' }}>*</span>
                 </label>
-                <span style={{ fontSize: 'var(--text-2xs)', color: topic.length > 280 ? 'var(--color-warning-text)' : 'var(--text-tertiary)' }}>
-                  {topic.length} / 300 characters
-                </span>
-              </div>
 
-              <textarea
-                id="blog-topic-input"
-                rows={3}
-                maxLength={300}
-                required
-                disabled={isGenerating}
-                value={topic}
-                onChange={(e) => setTopic(e.target.value)}
-                placeholder="e.g., Deep dive into LangGraph DAG workflows, multi-agent self-correction loops, and FastAPI integration..."
-                style={{
-                  width: '100%',
-                  background: 'var(--bg-input)',
-                  border: '1px solid var(--border-default)',
-                  borderRadius: 'var(--radius-md)',
-                  color: 'var(--text-primary)',
-                  padding: 'var(--space-3) var(--space-4)',
-                  fontSize: 'var(--text-sm)',
-                  fontFamily: 'inherit',
-                  lineHeight: 1.5,
-                  resize: 'vertical',
-                  transition: 'border-color var(--transition-fast)',
-                }}
-                onFocus={(e) => (e.target.style.borderColor = 'var(--accent-primary)')}
-                onBlur={(e) => (e.target.style.borderColor = 'var(--border-default)')}
-              />
-
-              {/* Preset Topic Chips */}
-              <div style={{ display: 'flex', alignItems: 'center', gap: 'var(--space-2)', flexWrap: 'wrap', marginTop: 'var(--space-3)' }}>
-                <span style={{ fontSize: 'var(--text-2xs)', color: 'var(--text-tertiary)', fontWeight: 500 }}>
-                  Suggestions:
-                </span>
-                {PRESET_TOPICS.map((preset, idx) => (
-                  <button
-                    key={idx}
-                    type="button"
-                    onClick={() => setTopic(preset)}
-                    disabled={isGenerating}
-                    style={{
-                      background: 'var(--bg-surface-elevated)',
-                      border: '1px solid var(--border-subtle)',
-                      borderRadius: 'var(--radius-sm)',
-                      padding: '2px var(--space-2)',
-                      fontSize: 'var(--text-2xs)',
-                      color: 'var(--text-secondary)',
-                      cursor: 'pointer',
-                      transition: 'all var(--transition-fast)',
-                    }}
-                    onMouseEnter={(e) => {
-                      e.currentTarget.style.borderColor = 'var(--accent-primary)';
-                      e.currentTarget.style.color = 'var(--text-primary)';
-                    }}
-                    onMouseLeave={(e) => {
-                      e.currentTarget.style.borderColor = 'var(--border-subtle)';
-                      e.currentTarget.style.color = 'var(--text-secondary)';
-                    }}
-                  >
-                    {preset.slice(0, 36)}...
-                  </button>
-                ))}
-              </div>
-            </div>
-
-            {/* Tone Selector */}
-            <div>
-              <label style={{ display: 'block', fontSize: 'var(--text-sm)', fontWeight: 600, color: 'var(--text-primary)', marginBottom: 'var(--space-2)' }}>
-                Editorial Tone
-              </label>
-              <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(200px, 1fr))', gap: 'var(--space-3)' }}>
-                {TONES.map((t) => {
-                  const isSelected = tone === t.id;
-                  return (
+                <div style={{ display: 'flex', alignItems: 'center', gap: 'var(--space-2)' }}>
+                  {topic.length > 0 && (
                     <button
-                      key={t.id}
                       type="button"
-                      onClick={() => setTone(t.id)}
+                      onClick={() => setTopic('')}
                       disabled={isGenerating}
                       style={{
-                        padding: 'var(--space-3) var(--space-4)',
-                        borderRadius: 'var(--radius-md)',
-                        border: `1px solid ${isSelected ? 'var(--accent-primary)' : 'var(--border-subtle)'}`,
-                        background: isSelected ? 'var(--accent-primary-subtle)' : 'var(--bg-surface-elevated)',
-                        color: isSelected ? 'var(--text-primary)' : 'var(--text-secondary)',
-                        textAlign: 'left',
+                        background: 'transparent',
+                        border: 'none',
+                        color: 'var(--text-tertiary)',
                         cursor: 'pointer',
-                        transition: 'all var(--transition-fast)',
+                        padding: '2px',
+                        display: 'flex',
+                        alignItems: 'center',
+                        gap: '2px',
+                        fontSize: 'var(--text-2xs)',
                       }}
-                      onMouseEnter={(e) => {
-                        if (!isSelected) e.currentTarget.style.borderColor = 'var(--border-default)';
-                      }}
-                      onMouseLeave={(e) => {
-                        if (!isSelected) e.currentTarget.style.borderColor = 'var(--border-subtle)';
-                      }}
+                      title="Clear topic"
                     >
-                      <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 'var(--space-1)' }}>
-                        <span style={{ fontWeight: 600, fontSize: 'var(--text-sm)', color: isSelected ? 'var(--accent-primary-text)' : 'var(--text-primary)' }}>
-                          {t.label}
-                        </span>
-                        {isSelected && <Check size={14} color="var(--accent-primary-text)" />}
-                      </div>
-                      <p style={{ fontSize: 'var(--text-2xs)', color: 'var(--text-tertiary)', margin: 0 }}>
-                        {t.desc}
-                      </p>
+                      <X size={12} />
+                      <span>Clear</span>
                     </button>
-                  );
-                })}
+                  )}
+                  <span
+                    style={{
+                      fontSize: 'var(--text-2xs)',
+                      fontWeight: 500,
+                      color: topic.length > 280 ? 'var(--color-warning-text)' : 'var(--text-tertiary)',
+                      background: 'var(--bg-surface-elevated)',
+                      padding: '2px 8px',
+                      borderRadius: 'var(--radius-sm)',
+                      border: '1px solid var(--border-subtle)',
+                    }}
+                  >
+                    {topic.length} / 300
+                  </span>
+                </div>
               </div>
-            </div>
 
-            {/* Target Language Dropdown */}
-            <div>
-              <label
-                htmlFor="target-language-select"
-                style={{ display: 'block', fontSize: 'var(--text-sm)', fontWeight: 600, color: 'var(--text-primary)', marginBottom: 'var(--space-2)' }}
-              >
-                Target Output Language
-              </label>
+              {/* Textarea */}
               <div style={{ position: 'relative' }}>
-                <select
-                  id="target-language-select"
-                  value={targetLanguage}
-                  onChange={(e) => setTargetLanguage(e.target.value)}
-                  disabled={isGenerating || loadingLanguages}
+                <textarea
+                  id="blog-topic-input"
+                  ref={textareaRef}
+                  rows={4}
+                  maxLength={300}
+                  required
+                  disabled={isGenerating}
+                  value={topic}
+                  onChange={(e) => setTopic(e.target.value)}
+                  onKeyDown={handleKeyDown}
+                  placeholder="e.g. Write a comprehensive guide on building scalable agentic DAG workflows in LangGraph with deterministic verification..."
                   style={{
                     width: '100%',
                     background: 'var(--bg-input)',
                     border: '1px solid var(--border-default)',
                     borderRadius: 'var(--radius-md)',
                     color: 'var(--text-primary)',
-                    padding: 'var(--space-3) var(--space-4)',
-                    paddingLeft: 'var(--space-10)',
+                    padding: 'var(--space-4)',
                     fontSize: 'var(--text-sm)',
                     fontFamily: 'inherit',
+                    lineHeight: 1.6,
+                    resize: 'vertical',
                     outline: 'none',
-                    cursor: 'pointer',
+                    minHeight: '120px',
+                    transition: 'border-color var(--transition-fast)',
                   }}
-                  onFocus={(e) => (e.target.style.borderColor = 'var(--accent-primary)')}
-                  onBlur={(e) => (e.target.style.borderColor = 'var(--border-default)')}
-                >
-                  {languages.map((lang) => (
-                    <option key={lang.code} value={lang.name} style={{ background: '#0b101c', color: '#fff' }}>
-                      {lang.name} ({lang.native_name}) {lang.name === 'English' ? '— Direct Route' : '— Invokes Localization Agent'}
-                    </option>
-                  ))}
-                </select>
-                <Globe
-                  size={16}
-                  color="var(--accent-primary-text)"
-                  style={{ position: 'absolute', left: 'var(--space-3)', top: '50%', transform: 'translateY(-50%)', pointerEvents: 'none' }}
                 />
               </div>
-              <p style={{ fontSize: 'var(--text-2xs)', color: 'var(--text-tertiary)', marginTop: 'var(--space-2)' }}>
-                {targetLanguage.toLowerCase() === 'english'
-                  ? 'English posts route directly from the Verifier Node to storage without extra translation latency.'
-                  : `Selecting ${targetLanguage} dynamically routes execution through Node 5 (Localization Agent).`}
-              </p>
-            </div>
-          </CardContent>
 
-          <CardFooter>
-            <Button
-              type="submit"
-              variant="primary"
-              size="lg"
-              disabled={isGenerating || !topic.trim()}
-              isLoading={isGenerating}
-              rightIcon={ArrowRight}
+              {/* Prompt Suggestions Toolbar */}
+              <div style={{ marginTop: 'var(--space-4)', paddingTop: 'var(--space-3)', borderTop: '1px solid var(--border-subtle)' }}>
+                <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 'var(--space-2)' }}>
+                  <span style={{ fontSize: 'var(--text-2xs)', color: 'var(--text-tertiary)', fontWeight: 600, textTransform: 'uppercase', letterSpacing: '0.04em' }}>
+                    Quick Directive Inspiration
+                  </span>
+                  <span style={{ fontSize: 'var(--text-2xs)', color: 'var(--text-muted)' }}>
+                    Click to load prompt
+                  </span>
+                </div>
+
+                <div style={{ display: 'flex', flexWrap: 'wrap', gap: 'var(--space-2)' }}>
+                  {SUGGESTION_TOPICS.map((sugg, idx) => (
+                    <button
+                      key={idx}
+                      type="button"
+                      onClick={() => setTopic(sugg.text)}
+                      disabled={isGenerating}
+                      style={{
+                        background: 'var(--bg-surface-elevated)',
+                        border: '1px solid var(--border-subtle)',
+                        borderRadius: 'var(--radius-sm)',
+                        padding: '4px 10px',
+                        fontSize: 'var(--text-xs)',
+                        color: 'var(--text-secondary)',
+                        cursor: 'pointer',
+                        transition: 'all var(--transition-fast)',
+                        display: 'inline-flex',
+                        alignItems: 'center',
+                        gap: '6px',
+                      }}
+                      onMouseEnter={(e) => {
+                        e.currentTarget.style.borderColor = 'var(--accent-primary)';
+                        e.currentTarget.style.color = 'var(--text-primary)';
+                        e.currentTarget.style.background = 'var(--bg-surface-hover)';
+                      }}
+                      onMouseLeave={(e) => {
+                        e.currentTarget.style.borderColor = 'var(--border-subtle)';
+                        e.currentTarget.style.color = 'var(--text-secondary)';
+                        e.currentTarget.style.background = 'var(--bg-surface-elevated)';
+                      }}
+                    >
+                      <Sparkles size={11} color="var(--accent-primary-text)" />
+                      <span>{sugg.label}</span>
+                    </button>
+                  ))}
+                </div>
+              </div>
+            </div>
+
+            {/* Pipeline Architecture Blueprint Preview */}
+            <div
+              style={{
+                background: 'var(--bg-surface)',
+                border: '1px solid var(--border-subtle)',
+                borderRadius: 'var(--radius-lg)',
+                padding: 'var(--space-4) var(--space-5)',
+              }}
             >
-              Launch Autonomous Agent
-            </Button>
-          </CardFooter>
-        </Card>
+              <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 'var(--space-3)' }}>
+                <span style={{ fontSize: 'var(--text-xs)', fontWeight: 600, color: 'var(--text-primary)', display: 'flex', alignItems: 'center', gap: 'var(--space-2)' }}>
+                  <Layers size={15} color="var(--accent-primary-text)" />
+                  <span>Execution Blueprint & Quality Guardrails</span>
+                </span>
+                <span style={{ fontSize: 'var(--text-2xs)', color: 'var(--accent-primary-text)', fontWeight: 500 }}>
+                  Deterministic Verification
+                </span>
+              </div>
+
+              <div
+                style={{
+                  display: 'grid',
+                  gridTemplateColumns: 'repeat(auto-fit, minmax(130px, 1fr))',
+                  gap: 'var(--space-2)',
+                  fontSize: 'var(--text-2xs)',
+                }}
+              >
+                <div style={{ background: 'var(--bg-surface-elevated)', padding: 'var(--space-2) var(--space-3)', borderRadius: 'var(--radius-sm)', border: '1px solid var(--border-subtle)' }}>
+                  <div style={{ color: 'var(--text-tertiary)', marginBottom: '2px' }}>Step 1-2</div>
+                  <div style={{ fontWeight: 600, color: 'var(--text-primary)' }}>Multi-Search DAG</div>
+                  <div style={{ color: 'var(--text-muted)' }}>Tavily & Wikipedia</div>
+                </div>
+
+                <div style={{ background: 'var(--bg-surface-elevated)', padding: 'var(--space-2) var(--space-3)', borderRadius: 'var(--radius-sm)', border: '1px solid var(--border-subtle)' }}>
+                  <div style={{ color: 'var(--text-tertiary)', marginBottom: '2px' }}>Step 3-4</div>
+                  <div style={{ fontWeight: 600, color: 'var(--text-primary)' }}>Fact Extraction</div>
+                  <div style={{ color: 'var(--text-muted)' }}>Topical grounding</div>
+                </div>
+
+                <div style={{ background: 'var(--bg-surface-elevated)', padding: 'var(--space-2) var(--space-3)', borderRadius: 'var(--radius-sm)', border: '1px solid var(--border-subtle)' }}>
+                  <div style={{ color: 'var(--text-tertiary)', marginBottom: '2px' }}>Step 5-6</div>
+                  <div style={{ fontWeight: 600, color: 'var(--text-primary)' }}>Prose Generator</div>
+                  <div style={{ color: 'var(--text-muted)' }}>Target: {Number(wordCount) || 800}w</div>
+                </div>
+
+                <div style={{ background: 'var(--bg-surface-elevated)', padding: 'var(--space-2) var(--space-3)', borderRadius: 'var(--radius-sm)', border: '1px solid var(--border-subtle)' }}>
+                  <div style={{ color: 'var(--text-tertiary)', marginBottom: '2px' }}>Step 7</div>
+                  <div style={{ fontWeight: 600, color: 'var(--color-success-text)' }}>Audit & Store</div>
+                  <div style={{ color: 'var(--text-muted)' }}>PostgreSQL persistence</div>
+                </div>
+              </div>
+            </div>
+          </div>
+
+          {/* ========================================================= */}
+          {/* RIGHT COLUMN: PRECISION ENGINE CONTROLS */}
+          {/* ========================================================= */}
+          <div style={{ display: 'flex', flexDirection: 'column', gap: 'var(--space-5)' }}>
+            {/* Engine Parameters Card */}
+            <div
+              style={{
+                background: 'var(--bg-surface)',
+                border: '1px solid var(--border-subtle)',
+                borderRadius: 'var(--radius-lg)',
+                padding: 'var(--space-5)',
+                display: 'flex',
+                flexDirection: 'column',
+                gap: 'var(--space-5)',
+                boxShadow: 'var(--shadow-sm)',
+              }}
+            >
+              <div>
+                <h3 style={{ fontSize: 'var(--text-base)', fontWeight: 600, color: 'var(--text-primary)', margin: 0, display: 'flex', alignItems: 'center', gap: 'var(--space-2)' }}>
+                  <Sliders size={16} color="var(--accent-primary-text)" />
+                  <span>Engine Parameters</span>
+                </h3>
+                <p style={{ fontSize: 'var(--text-xs)', color: 'var(--text-secondary)', margin: 'var(--space-1) 0 0 0' }}>
+                  Fine-tune output length, voice, and localization.
+                </p>
+              </div>
+
+              {/* 1. Word Count Dropdown Selector */}
+              <div>
+                <label style={{ display: 'block', fontSize: 'var(--text-xs)', fontWeight: 600, color: 'var(--text-primary)', marginBottom: 'var(--space-2)' }}>
+                  Article Length & Target Word Count
+                </label>
+                <LengthDropdown
+                  value={wordCount}
+                  onChange={setWordCount}
+                  disabled={isGenerating}
+                />
+              </div>
+
+              {/* 2. Editorial Tone Selector */}
+              <div>
+                <label style={{ display: 'block', fontSize: 'var(--text-xs)', fontWeight: 600, color: 'var(--text-primary)', marginBottom: 'var(--space-2)' }}>
+                  Editorial Tone & Voice
+                </label>
+                <div style={{ display: 'grid', gridTemplateColumns: 'repeat(2, 1fr)', gap: 'var(--space-2)' }}>
+                  {TONES.map((t) => {
+                    const isSelected = tone === t.id;
+                    const IconComp = t.icon;
+                    return (
+                      <button
+                        key={t.id}
+                        type="button"
+                        onClick={() => setTone(t.id)}
+                        disabled={isGenerating}
+                        style={{
+                          padding: 'var(--space-2) var(--space-3)',
+                          borderRadius: 'var(--radius-md)',
+                          border: `1px solid ${isSelected ? 'var(--accent-primary)' : 'var(--border-subtle)'}`,
+                          background: isSelected ? 'var(--accent-primary-subtle)' : 'var(--bg-surface-elevated)',
+                          textAlign: 'left',
+                          cursor: 'pointer',
+                          transition: 'all var(--transition-fast)',
+                          display: 'flex',
+                          flexDirection: 'column',
+                          gap: '2px',
+                        }}
+                        onMouseEnter={(e) => {
+                          if (!isSelected) e.currentTarget.style.borderColor = 'var(--border-default)';
+                        }}
+                        onMouseLeave={(e) => {
+                          if (!isSelected) e.currentTarget.style.borderColor = 'var(--border-subtle)';
+                        }}
+                      >
+                        <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
+                          <span style={{ fontSize: 'var(--text-xs)', fontWeight: 600, color: isSelected ? 'var(--accent-primary-text)' : 'var(--text-primary)', display: 'flex', alignItems: 'center', gap: '5px' }}>
+                            <IconComp size={13} />
+                            {t.label}
+                          </span>
+                          {isSelected && <Check size={12} color="var(--accent-primary-text)" />}
+                        </div>
+                        <span style={{ fontSize: '10px', color: 'var(--text-tertiary)', lineHeight: 1.2 }}>
+                          {t.desc}
+                        </span>
+                      </button>
+                    );
+                  })}
+                </div>
+              </div>
+
+              {/* 3. Output Language Custom Dropdown */}
+              <div>
+                <label style={{ display: 'block', fontSize: 'var(--text-xs)', fontWeight: 600, color: 'var(--text-primary)', marginBottom: 'var(--space-2)' }}>
+                  Target Output Language
+                </label>
+                <CustomSelect
+                  value={targetLanguage}
+                  onChange={setTargetLanguage}
+                  options={languageOptions}
+                  leftIcon={Globe}
+                  disabled={isGenerating || loadingLanguages}
+                  searchable={true}
+                />
+                <p style={{ fontSize: '11px', color: 'var(--text-tertiary)', margin: 'var(--space-1) 0 0 0' }}>
+                  {targetLanguage.toLowerCase() === 'english'
+                    ? 'English drafts route directly to persistence without translation latency.'
+                    : `Triggers Node 5 (Localization Agent) for ${targetLanguage}.`}
+                </p>
+              </div>
+            </div>
+
+            {/* Launch Action Card */}
+            <div
+              style={{
+                background: 'var(--bg-surface)',
+                border: '1px solid var(--border-subtle)',
+                borderRadius: 'var(--radius-lg)',
+                padding: 'var(--space-5)',
+                boxShadow: 'var(--shadow-sm)',
+                display: 'flex',
+                flexDirection: 'column',
+                gap: 'var(--space-4)',
+              }}
+            >
+              {/* Summary pills */}
+              <div style={{ display: 'flex', alignItems: 'center', gap: 'var(--space-2)', flexWrap: 'wrap' }}>
+                <span
+                  style={{
+                    fontSize: '11px',
+                    padding: '2px 8px',
+                    borderRadius: 'var(--radius-full)',
+                    background: 'var(--bg-surface-elevated)',
+                    border: '1px solid var(--border-subtle)',
+                    color: 'var(--text-secondary)',
+                    fontWeight: 500,
+                  }}
+                >
+                  📄 {Number(wordCount).toLocaleString()}w (~{estReadTime}m)
+                </span>
+                <span
+                  style={{
+                    fontSize: '11px',
+                    padding: '2px 8px',
+                    borderRadius: 'var(--radius-full)',
+                    background: 'var(--bg-surface-elevated)',
+                    border: '1px solid var(--border-subtle)',
+                    color: 'var(--text-secondary)',
+                    fontWeight: 500,
+                  }}
+                >
+                  🎭 {tone}
+                </span>
+                <span
+                  style={{
+                    fontSize: '11px',
+                    padding: '2px 8px',
+                    borderRadius: 'var(--radius-full)',
+                    background: 'var(--bg-surface-elevated)',
+                    border: '1px solid var(--border-subtle)',
+                    color: 'var(--text-secondary)',
+                    fontWeight: 500,
+                  }}
+                >
+                  🌐 {targetLanguage}
+                </span>
+              </div>
+
+              {/* Primary Launch Button */}
+              <Button
+                type="submit"
+                variant="primary"
+                size="lg"
+                disabled={isGenerating || !topic.trim()}
+                isLoading={isGenerating}
+                rightIcon={ArrowRight}
+                style={{ width: '100%', height: '48px', fontSize: 'var(--text-sm)', fontWeight: 600 }}
+              >
+                Launch Autonomous Agent
+              </Button>
+
+              {/* Keyboard Shortcut Note */}
+              <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', gap: '4px', fontSize: '11px', color: 'var(--text-tertiary)' }}>
+                <span>Tip: Press</span>
+                <kbd
+                  style={{
+                    background: 'var(--bg-surface-elevated)',
+                    border: '1px solid var(--border-default)',
+                    borderRadius: 'var(--radius-xs)',
+                    padding: '1px 5px',
+                    fontSize: '10px',
+                    fontFamily: 'inherit',
+                    color: 'var(--text-secondary)',
+                  }}
+                >
+                  Ctrl
+                </kbd>
+                <span>+</span>
+                <kbd
+                  style={{
+                    background: 'var(--bg-surface-elevated)',
+                    border: '1px solid var(--border-default)',
+                    borderRadius: 'var(--radius-xs)',
+                    padding: '1px 5px',
+                    fontSize: '10px',
+                    fontFamily: 'inherit',
+                    color: 'var(--text-secondary)',
+                  }}
+                >
+                  Enter
+                </kbd>
+                <span>to launch</span>
+              </div>
+            </div>
+          </div>
+        </div>
       </form>
     </div>
   );

@@ -109,9 +109,14 @@ async def fetch_wikipedia_search(
             if resp.status_code == 200:
                 data = resp.json()
                 search_items = data.get("query", {}).get("search", [])
+                STOP_WORDS = {
+                    "periods", "period", "history", "timeline", "overview", "article",
+                    "guide", "about", "write", "blog", "2024", "2025", "2026", "news",
+                    "updates", "season", "update", "latest", "recent"
+                }
                 query_terms = [
                     w.lower() for w in query.split()
-                    if len(w) > 3 and w.lower() not in {"periods", "period", "history", "timeline", "overview", "article", "guide", "about", "write", "blog"}
+                    if len(w) > 3 and w.lower() not in STOP_WORDS
                 ]
                 matched_items = []
                 for item in search_items:
@@ -119,7 +124,9 @@ async def fetch_wikipedia_search(
                     snippet = item.get("snippet", "").lower()
                     if not t:
                         continue
-                    if not query_terms or any(term in t.lower() or term in snippet for term in query_terms):
+                    if query_terms and any(term in t.lower() or term in snippet for term in query_terms):
+                        matched_items.append(item)
+                    elif not query_terms:
                         matched_items.append(item)
                     if len(matched_items) >= max_results:
                         break

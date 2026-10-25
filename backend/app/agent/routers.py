@@ -70,10 +70,10 @@ def verification_router(state: BlogState) -> str:
         return "revise"
 
     # Max revisions reached (2 revisions completed)
-    fallback = getattr(settings, "REVIEW_FALLBACK", "fail").lower().strip()
+    fallback = getattr(settings, "REVIEW_FALLBACK", "flag").lower().strip()
     if fallback == "flag":
         logger.warning(
-            f"[Verification Router] Max revisions reached. Flagging article with status 'needs_review'."
+            f"[Verification Router] Max revisions reached (Score: {score}/10). Flagging article with status 'needs_review'."
         )
         return "flag_review"
     else:

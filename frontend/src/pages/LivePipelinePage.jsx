@@ -368,9 +368,17 @@ export default function LivePipelinePage() {
 
                 <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3, 1fr)', gap: 'var(--space-3)' }}>
                   <div style={{ background: 'var(--bg-surface-elevated)', padding: 'var(--space-3)', borderRadius: 'var(--radius-md)' }}>
-                    <div style={{ fontSize: 'var(--text-2xs)', color: 'var(--text-tertiary)' }}>Word Count</div>
-                    <div style={{ fontSize: 'var(--text-lg)', fontWeight: 600, color: 'var(--text-primary)' }}>
-                      {(activeResult.content || '').trim().split(/\s+/).filter(Boolean).length}
+                    <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                      <div style={{ fontSize: 'var(--text-2xs)', color: 'var(--text-tertiary)' }}>Word Count</div>
+                      {activeResult.target_word_count && (
+                        <span style={{ fontSize: 'var(--text-2xs)', color: 'var(--accent-primary-text)', background: 'var(--accent-primary-subtle)', padding: '1px 5px', borderRadius: '4px' }}>
+                          Target: {activeResult.target_word_count}
+                        </span>
+                      )}
+                    </div>
+                    <div style={{ fontSize: 'var(--text-lg)', fontWeight: 600, color: 'var(--text-primary)', marginTop: '2px' }}>
+                      {activeResult.word_count || (activeResult.content || '').trim().split(/\s+/).filter(Boolean).length}
+                      <span style={{ fontSize: 'var(--text-xs)', color: 'var(--text-tertiary)', fontWeight: 400, marginLeft: '4px' }}>words</span>
                     </div>
                   </div>
 

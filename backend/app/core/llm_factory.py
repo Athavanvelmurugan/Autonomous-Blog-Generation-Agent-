@@ -101,6 +101,7 @@ def get_node_llm(
     node_name: str,
     temperature_override: Optional[float] = None,
     creativity_level: Optional[str] = None,
+    max_tokens_override: Optional[int] = None,
 ) -> BaseChatModel:
     """
     Unified Per-Node LLM Factory.
@@ -110,6 +111,7 @@ def get_node_llm(
         node_name: Canonical name or alias of the LangGraph node (e.g. 'writer', 'verifier')
         temperature_override: Optional explicit temperature (used during dynamic revision step-downs)
         creativity_level: Optional API creativity preset ('low', 'balanced', 'high')
+        max_tokens_override: Optional max tokens override (e.g. scaled for target word count)
         
     Returns:
         Configured, cached BaseChatModel instance with observability metadata.
@@ -142,14 +144,15 @@ def get_node_llm(
     else:
         passed_temp = effective_temp
 
-    # 3. Resolve API key
+    # 3. Resolve API key and effective max tokens
     api_key = settings.GROQ_API_KEY if provider == "groq" else settings.OPENAI_API_KEY
+    effective_max_tokens = max_tokens_override if max_tokens_override is not None else config.max_tokens
 
     # 4. Observability: Log hyperparameter telemetry
     logger.info(
         f"[LLM Call] Node: '{config.node_name}' | Model: '{model}' ({provider}) | "
         f"Temperature: {passed_temp if passed_temp is not None else 'N/A (Reasoning)'} "
-        f"(Source: {config.source}) | MaxTokens: {config.max_tokens}"
+        f"(Source: {config.source}) | MaxTokens: {effective_max_tokens}"
     )
 
     # 5. Fetch or instantiate cached client
@@ -157,7 +160,7 @@ def get_node_llm(
         provider=provider,
         model=model,
         temperature=passed_temp,
-        max_tokens=config.max_tokens,
+        max_tokens=effective_max_tokens,
         top_p=config.top_p,
         timeout=config.timeout,
         max_retries=config.max_retries,
@@ -172,7 +175,7 @@ def get_node_llm(
                 "node_name": config.node_name,
                 "model": model,
                 "temperature": passed_temp,
-                "max_tokens": config.max_tokens,
+                "max_tokens": effective_max_tokens,
                 "provider": provider,
                 "source": config.source,
             },

@@ -137,11 +137,14 @@ async def generate_blog(
     # Idempotency and thread isolation
     idempotency_key = request.idempotency_key or f"run_{abs(hash(request.topic)) % 10000000}_{int(time.time())}"
     thread_id = f"thread_{idempotency_key}"
+    target_words = request.word_count or 800
 
     initial_state: BlogState = {
         "topic": request.topic.strip(),
         "tone": request.tone or "Informative",
         "target_language": request.target_language or "English",
+        "target_word_count": target_words,
+        "word_count": 0,
         "creativity": request.creativity or "balanced",
         "planned_queries": [],
         "query_retry_count": 0,
@@ -187,7 +190,7 @@ async def generate_blog(
         )
 
         # Check for explicit failure path (e.g. insufficient sources or verification halt)
-        if final_state.get("error") or final_state.get("current_step") == "failed":
+        if final_state.get("current_step") == "failed" or (not final_state.get("content") and final_state.get("error")):
             err_msg = final_state.get("error") or "Pipeline halted: requirements not met."
             logger.warning(f"Blog generation aborted: {err_msg}")
             if "insufficient" in err_msg.lower():
@@ -204,6 +207,7 @@ async def generate_blog(
         verif_score = final_state.get("verification_score") or 8.5
         critique_text = final_state.get("critique")
         retrieved_sources = final_state.get("sources", [])
+        actual_word_count = final_state.get("word_count") or len(final_state["content"].split())
 
         # Transactional write through BlogRepository
         blog_repo = BlogRepository(db)
@@ -221,6 +225,8 @@ async def generate_blog(
             original_content=final_state.get("original_content"),
             execution_time_seconds=execution_time,
             steps_completed=final_state.get("steps_completed", []),
+            target_word_count=target_words,
+            word_count=actual_word_count,
         )
 
         # Invalidate listing cache
@@ -232,6 +238,8 @@ async def generate_blog(
             topic=request.topic,
             tone=request.tone or "Informative",
             language=request.target_language or "English",
+            target_word_count=target_words,
+            word_count=actual_word_count,
             title=final_state["title"],
             content=final_state["content"],
             verification_score=verif_score,
@@ -268,11 +276,14 @@ async def generate_blog_stream(
 
     idempotency_key = request.idempotency_key or f"run_{abs(hash(request.topic)) % 10000000}_{int(time.time())}"
     thread_id = f"thread_{idempotency_key}"
+    target_words = request.word_count or 800
 
     initial_state: BlogState = {
         "topic": request.topic.strip(),
         "tone": request.tone or "Informative",
         "target_language": request.target_language or "English",
+        "target_word_count": target_words,
+        "word_count": 0,
         "creativity": request.creativity or "balanced",
         "topic_type": None,
         "category": None,
@@ -349,7 +360,10 @@ async def generate_blog_stream(
                         event_data["title"] = node_update.get("title")
                         event_data["message"] = f"Headline generated: {node_update.get('title')}"
                     elif node_name == "content_generator":
-                        event_data["message"] = f"Blog draft synthesized ({len(node_update.get('content', '').split())} words) with inline citations."
+                        actual_cnt = node_update.get("word_count") or len(node_update.get("content", "").split())
+                        event_data["word_count"] = actual_cnt
+                        event_data["target_word_count"] = target_words
+                        event_data["message"] = f"Blog draft synthesized ({actual_cnt} / {target_words} target words) with inline citations."
                         event_data["content_preview"] = node_update.get("content", "")[:300]
                     elif node_name == "verifier_agent":
                         score = node_update.get("verification_score")
@@ -370,7 +384,7 @@ async def generate_blog_stream(
                     yield f"data: {json.dumps(event_data)}\n\n"
 
             # Check if workflow aborted due to error
-            if accumulated_state.get("error") or accumulated_state.get("current_step") == "failed":
+            if accumulated_state.get("current_step") == "failed" or (not accumulated_state.get("content") and accumulated_state.get("error")):
                 err_msg = accumulated_state.get("error") or "Pipeline halted: requirements not met."
                 logger.warning(f"[SSE Stream] Pipeline terminated with error: {err_msg}")
                 yield f"data: {json.dumps({'type': 'error', 'detail': err_msg})}\n\n"
@@ -381,6 +395,7 @@ async def generate_blog_stream(
             verif_score = accumulated_state.get("verification_score") or 8.5
             critique_text = accumulated_state.get("critique")
             retrieved_sources = accumulated_state.get("sources", [])
+            actual_word_count = accumulated_state.get("word_count") or len(accumulated_state["content"].split())
 
             saved_id = None
             try:
@@ -399,6 +414,8 @@ async def generate_blog_stream(
                     original_content=accumulated_state.get("original_content"),
                     execution_time_seconds=execution_time,
                     steps_completed=accumulated_state.get("steps_completed", []),
+                    target_word_count=target_words,
+                    word_count=actual_word_count,
                 )
                 saved_id = saved_blog.id
                 cache.invalidate_prefix("blogs:")
@@ -412,6 +429,8 @@ async def generate_blog_stream(
                 "topic": request.topic,
                 "tone": request.tone,
                 "language": request.target_language,
+                "target_word_count": target_words,
+                "word_count": actual_word_count,
                 "title": accumulated_state["title"],
                 "content": accumulated_state["content"],
                 "verification_score": verif_score,
@@ -456,6 +475,8 @@ async def list_blogs(
                 topic=b.topic,
                 tone=b.tone,
                 target_language=b.target_language,
+                target_word_count=getattr(b.latest_version, "target_word_count", 800) if b.latest_version else 800,
+                word_count=getattr(b.latest_version, "word_count", None) if b.latest_version else None,
                 title=b.latest_version.title if b.latest_version else "",
                 content=b.latest_version.content if b.latest_version else "",
                 verification_score=b.latest_version.verification_score if b.latest_version else 8.5,
@@ -498,6 +519,8 @@ async def get_blog_by_id(
         topic=post.topic,
         tone=post.tone,
         target_language=post.target_language,
+        target_word_count=getattr(latest, "target_word_count", 800) if latest else 800,
+        word_count=getattr(latest, "word_count", None) if latest else None,
         title=latest.title if latest else "",
         content=latest.content if latest else "",
         verification_score=latest.verification_score if latest else 8.5,

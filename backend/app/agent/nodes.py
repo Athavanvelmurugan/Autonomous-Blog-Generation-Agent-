@@ -103,17 +103,25 @@ async def plan_queries_node(state: BlogState) -> dict:
             clean_topic = topic
 
         year = today_date[:4]
-        if topic_type == "evergreen":
-            queries = [
-                f"{clean_topic} history overview",
-                f"{clean_topic} timeline origins architecture",
-                f"{clean_topic} records documentation",
-            ]
+        if category in ("ai", "tech"):
+            if topic_type == "trending":
+                queries = [
+                    f"{clean_topic} overview features",
+                    f"{clean_topic} {year} updates",
+                    f"{clean_topic} architecture documentation",
+                ]
+            else:
+                queries = [
+                    f"{clean_topic} architecture guide",
+                    f"{clean_topic} tutorial implementation",
+                    f"{clean_topic} best practices",
+                ]
         else:
+            # Conceptual, lifestyle, psychology, business, general
             queries = [
-                f"{clean_topic} overview analysis",
-                f"{clean_topic} {year} news updates",
-                f"{clean_topic} official documentation",
+                f"{clean_topic} concepts psychology",
+                f"{clean_topic} practical advice guide",
+                f"{clean_topic} understanding examples",
             ]
 
     steps = list(state.get("steps_completed", []))
@@ -205,42 +213,43 @@ async def clean_dedupe_node(state: BlogState) -> dict:
     # 2. Recency Filtering (applied only to trending topics)
     filtered = filter_by_recency(deduped, topic_type=topic_type)
 
-    # Prioritize authoritative sources with substantive content length (e.g. Wikipedia)
-    filtered.sort(
-        key=lambda s: (
-            1 if "wikipedia.org" in (s.get("domain") or "") else 0,
-            len(s.get("raw_content") or s.get("snippet") or "")
-        ),
-        reverse=True
-    )
-
-    distinct_domains = {s.get("domain") for s in filtered if s.get("domain")}
-    is_sufficient = len(filtered) >= min_sources and len(distinct_domains) >= 2
-
-    # Verify topical grounding for specific entity names/keywords
+    # Filter out off-topic sources and sort by semantic keyword relevance to topic
     topic_clean = re.sub(
         r"^(?:write\s+(?:a\s+)?(?:blog|article|post|guide)(?:\s+(?:about|on|for))?\s*|\b(?:please\s+)?generate\s+(?:a\s+)?blog\s+(?:about|on|for)?\s*)",
         "",
         state.get("topic", ""),
         flags=re.IGNORECASE,
     ).strip()
-    distinctive_terms = [
-        w.lower().rstrip("s") for w in re.findall(r"\b[a-zA-Z0-9_-]{6,}\b", topic_clean)
-        if w.lower() not in {"history", "architecture", "overview", "review", "protocol", "quantum", "concurrency", "performance", "processing", "threading", "models", "period", "periods", "system", "systems", "release", "releases", "internal", "framework"}
-    ]
-    error_msg = None
-    if is_sufficient and distinctive_terms:
-        all_text = " ".join([f"{s.get('title', '')} {s.get('url', '')} {s.get('snippet', '')}" for s in filtered]).lower()
-        if not any(term in all_text for term in distinctive_terms):
-            is_sufficient = False
-            error_msg = f"Insufficient ground-truth sources: No collected sources match distinctive entity '{distinctive_terms[0]}'. Halting to prevent ungrounded writing."
+    topic_keywords = {
+        w.lower() for w in re.findall(r"\b[a-zA-Z]{4,}\b", topic_clean)
+        if w.lower() not in {"write", "blog", "about", "post", "article", "guide", "please", "this", "that", "with", "from", "your", "what"}
+    }
 
-    if not is_sufficient and not error_msg:
+    def _relevance_score(src: dict) -> float:
+        text = f"{src.get('title', '')} {src.get('snippet', '')}".lower()
+        if not topic_keywords:
+            return float(len(src.get("snippet") or ""))
+        matches = sum(1 for w in topic_keywords if w in text or w.rstrip("s") in text)
+        return float(matches * 100 + min(len(src.get("snippet") or ""), 500))
+
+    # Drop clearly off-topic sources if we have enough relevant ones
+    if topic_keywords and len(filtered) > 3:
+        relevant_only = [s for s in filtered if _relevance_score(s) >= 100]
+        if len(relevant_only) >= min_sources:
+            filtered = relevant_only
+
+    # Sort primarily by topical keyword relevance
+    filtered.sort(key=_relevance_score, reverse=True)
+
+    distinct_domains = {s.get("domain") for s in filtered if s.get("domain")}
+    is_sufficient = len(filtered) >= min_sources and (len(distinct_domains) >= 2 or len(filtered) >= 3)
+    error_msg = None
+
+    if not is_sufficient:
         error_msg = (
             f"Insufficient ground-truth sources found: retrieved {len(filtered)} valid sources across "
-            f"{len(distinct_domains)} distinct domains. Required at least {min_sources} sources across 2 distinct domains."
+            f"{len(distinct_domains)} distinct domains. Required at least {min_sources} sources across distinct domains."
         )
-    if error_msg:
         logger.warning(f"[Clean & Dedupe] {error_msg}")
 
     # Build backward-compatible research context snippet string
@@ -305,11 +314,11 @@ async def extract_facts_node(state: BlogState) -> dict:
         steps.append("extract_facts")
 
     error_msg = None
-    min_facts = getattr(settings, "MIN_FACTS_REQUIRED", 3)
-    if len(verified_fact_items) < min_facts:
+    min_facts = getattr(settings, "MIN_FACTS_REQUIRED", 2)
+    if len(verified_fact_items) == 0 and not state.get("research_data"):
         error_msg = (
-            f"Insufficient verified atomic facts extracted: found {len(verified_fact_items)} facts. "
-            f"Required at least {min_facts} verified facts to write an authoritative, non-redundant blog post."
+            f"No verified atomic facts or research data could be extracted for topic '{topic}'. "
+            f"Cannot write grounded blog post."
         )
         logger.warning(f"[Node 4: Extract Facts] {error_msg}")
 
@@ -401,9 +410,19 @@ async def generate_content_node(state: BlogState) -> dict:
 
     # Step down temperature by 0.1 per revision (min 0.1)
     effective_temp = max(0.1, round(base_temp - (0.1 * min(revisions, 2)), 2))
-    logger.info(f"[Node 6: Writer] Drafting '{state['title']}' (Revision #{revisions}, Temp: {effective_temp})")
+    target_words = state.get("target_word_count") or 800
+    needed_max_tokens = max(2048, min(8192, int(target_words * 2.2)))
 
-    llm = get_llm("content_generator", temperature_override=effective_temp)
+    logger.info(
+        f"[Node 6: Writer] Drafting '{state['title']}' (Target: {target_words} words, "
+        f"Revision #{revisions}, Temp: {effective_temp}, MaxTokens: {needed_max_tokens})"
+    )
+
+    llm = get_llm(
+        "content_generator",
+        temperature_override=effective_temp,
+        max_tokens_override=needed_max_tokens,
+    )
 
     facts = state.get("facts", [])
     facts_table_md = state.get("research_data") or "No verified facts table available."
@@ -413,8 +432,9 @@ async def generate_content_node(state: BlogState) -> dict:
         f"Title: {state['title']}\n"
         f"Topic: {state['topic']}\n"
         f"Tone: {state.get('tone', 'Informative')}\n"
+        f"Target Length: Approximately {target_words} words (Allowable range: {int(target_words * 0.85)} - {int(target_words * 1.15)} words)\n"
         f"Current Date: {today_date}\n\n"
-        f"VERIFIED FACTS TABLE (Only write claims from this table; cite every claim as [F1], [F2], etc.):\n"
+        f"VERIFIED RESEARCH CONTEXT & FACTS:\n"
         f"{facts_table_md}\n\n"
     )
 
@@ -440,9 +460,11 @@ async def generate_content_node(state: BlogState) -> dict:
         prompt_content += "Strictly eliminate all flagged claims and cite remaining statements accurately.\n\n"
 
     prompt_content += (
-        "Write the complete Markdown blog post now. Remember: Every factual body paragraph MUST cite "
-        "at least one verified fact ID like [F1], [F2]. Do NOT write uncited filler or background claims. "
-        "Do NOT write raw URLs. Do NOT write a manual Sources section."
+        f"Write the complete Markdown blog post now matching the requested tone and target length (~{target_words} words). "
+        "Weave relevant verified facts naturally into the text and cite them as [F1], [F2]. "
+        "Provide rich, engaging, nuanced analysis and human-grade explanations. "
+        "Do NOT output raw URLs in the text (the system will automatically build sources and citations). "
+        "Do NOT write a manual Sources section."
     )
 
     messages = [
@@ -457,6 +479,9 @@ async def generate_content_node(state: BlogState) -> dict:
     sources = state.get("sources", [])
     full_content, sources_section = post_process_citations(raw_draft, facts, sources)
 
+    # Compute actual generated word count (counting prose words)
+    actual_words = len(re.findall(r"\b\w+\b", full_content))
+
     steps = list(state.get("steps_completed", []))
     if "content_generator" not in steps:
         steps.append("content_generator")
@@ -468,6 +493,8 @@ async def generate_content_node(state: BlogState) -> dict:
         "content": full_content,
         "original_content": full_content,
         "sources_section": sources_section,
+        "word_count": actual_words,
+        "target_word_count": target_words,
         "current_step": "content_generated",
         "steps_completed": steps,
         "revision_count": revisions + 1,
@@ -588,12 +615,15 @@ async def translate_content_node(state: BlogState) -> dict:
 
     node_timings = dict(state.get("node_timings") or {})
     node_timings["translator"] = round(time.perf_counter() - start_time, 3)
+    trans_word_count = len(re.findall(r"\b\w+\b", translated_content))
 
     result = {
         "title": translated_title,
         "content": translated_content,
         "translated_title": translated_title,
         "translated_content": translated_content,
+        "word_count": trans_word_count,
+        "target_word_count": state.get("target_word_count", 800),
         "current_step": "translation_completed",
         "steps_completed": steps,
         "node_timings": node_timings,
