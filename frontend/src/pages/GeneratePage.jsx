@@ -26,11 +26,38 @@ import {
 } from 'lucide-react';
 
 const SUGGESTION_TOPICS = [
+  { label: 'Machine Learning 101', text: 'Machine Learning for Beginners' },
+  { label: 'Python Fundamentals', text: 'Python Programming for Beginners' },
+  { label: 'RAG Explained', text: 'Retrieval-Augmented Generation Explained' },
+  { label: 'Deep RL Applications', text: 'Deep Reinforcement Learning Applications' },
   { label: 'Agentic AI 2026', text: 'Autonomous Agentic AI in 2026: Trends, Reasoning Paradigms, and Multi-Agent Orchestration' },
-  { label: 'LangGraph DAGs', text: 'Mastering Directed Acyclic Graphs (DAG) in LangGraph with Dynamic Routing' },
-  { label: 'FastAPI & Postgres', text: 'High-Performance Async REST APIs with FastAPI, Asyncpg, and PostgreSQL' },
-  { label: 'Human Psychology', text: 'Understanding One-Sided Love: Psychological Depth, Emotional Realities, and Moving Forward' },
-  { label: 'Production RAG', text: 'Vector Databases vs Relational DBs for Production RAG Pipelines' },
+];
+
+const AUDIENCES = [
+  {
+    id: 'Beginner',
+    label: 'Beginner',
+    desc: 'Clear intuition, analogies, foundational Python code',
+    icon: BookOpen,
+  },
+  {
+    id: 'Intermediate',
+    label: 'Intermediate',
+    desc: 'Practical design patterns, architecture & tradeoffs',
+    icon: Cpu,
+  },
+  {
+    id: 'Advanced',
+    label: 'Advanced',
+    desc: 'Algorithmic internals, mathematical depth & edge cases',
+    icon: Layers,
+  },
+  {
+    id: 'Executive',
+    label: 'Executive',
+    desc: 'High-level strategy, business impact & deployment ROI',
+    icon: Briefcase,
+  },
 ];
 
 const TONES = [
@@ -69,6 +96,8 @@ export default function GeneratePage() {
     setTopic,
     tone,
     setTone,
+    targetAudience,
+    setTargetAudience,
     targetLanguage,
     setTargetLanguage,
     wordCount,
@@ -127,8 +156,9 @@ export default function GeneratePage() {
     startGeneration({
       topic,
       tone,
+      target_audience: targetAudience || 'Beginner',
       target_language: targetLanguage,
-      word_count: Number(wordCount) || 800,
+      word_count: Number(wordCount) || 1500,
     });
     navigate('/pipeline/live');
   };
@@ -405,7 +435,51 @@ export default function GeneratePage() {
                 </p>
               </div>
 
-              {/* 1. Word Count Dropdown Selector */}
+              {/* 1. Target Audience Selector */}
+              <div>
+                <label style={{ display: 'block', fontSize: 'var(--text-xs)', fontWeight: 600, color: 'var(--text-primary)', marginBottom: 'var(--space-2)' }}>
+                  Target Audience
+                </label>
+                <div style={{ display: 'grid', gridTemplateColumns: 'repeat(2, 1fr)', gap: 'var(--space-2)' }}>
+                  {AUDIENCES.map((a) => {
+                    const isSelected = (targetAudience || 'Beginner') === a.id;
+                    const IconComp = a.icon;
+                    return (
+                      <button
+                        key={a.id}
+                        type="button"
+                        onClick={() => setTargetAudience(a.id)}
+                        disabled={isGenerating}
+                        style={{
+                          padding: 'var(--space-2) var(--space-3)',
+                          borderRadius: 'var(--radius-md)',
+                          border: `1px solid ${isSelected ? 'var(--accent-primary)' : 'var(--border-subtle)'}`,
+                          background: isSelected ? 'var(--accent-primary-subtle)' : 'var(--bg-surface-elevated)',
+                          textAlign: 'left',
+                          cursor: 'pointer',
+                          transition: 'all var(--transition-fast)',
+                          display: 'flex',
+                          flexDirection: 'column',
+                          gap: '2px',
+                        }}
+                      >
+                        <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
+                          <span style={{ fontSize: 'var(--text-xs)', fontWeight: 600, color: isSelected ? 'var(--accent-primary-text)' : 'var(--text-primary)', display: 'flex', alignItems: 'center', gap: '5px' }}>
+                            <IconComp size={13} />
+                            {a.label}
+                          </span>
+                          {isSelected && <Check size={12} color="var(--accent-primary-text)" />}
+                        </div>
+                        <span style={{ fontSize: '10px', color: 'var(--text-tertiary)', lineHeight: 1.2 }}>
+                          {a.desc}
+                        </span>
+                      </button>
+                    );
+                  })}
+                </div>
+              </div>
+
+              {/* 2. Word Count Dropdown Selector */}
               <div>
                 <label style={{ display: 'block', fontSize: 'var(--text-xs)', fontWeight: 600, color: 'var(--text-primary)', marginBottom: 'var(--space-2)' }}>
                   Article Length & Target Word Count
@@ -417,7 +491,7 @@ export default function GeneratePage() {
                 />
               </div>
 
-              {/* 2. Editorial Tone Selector */}
+              {/* 3. Editorial Tone Selector */}
               <div>
                 <label style={{ display: 'block', fontSize: 'var(--text-xs)', fontWeight: 600, color: 'var(--text-primary)', marginBottom: 'var(--space-2)' }}>
                   Editorial Tone & Voice

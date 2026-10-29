@@ -68,6 +68,7 @@ class VerificationReport(BaseModel):
     detected_hallucinations: List[str] = Field(default_factory=list)
     unsupported_claims: List[str] = Field(default_factory=list)
     unverified_commands: List[str] = Field(default_factory=list)
+    evaluation: Optional[Dict[str, str]] = Field(default_factory=dict, description="Multi-dimensional evaluation: completeness, readability, repetition, structure, factual_support, source_quality")
     critique: str = Field(default="PASSED - Verified factual accuracy and compelling tone.")
     status: str = Field(default="passed")  # "passed", "revising", "needs_review", "failed"
 
@@ -84,10 +85,12 @@ class BlogState(TypedDict):
     word_count: Optional[int]
     creativity: Optional[str]
     
-    # Topic metadata
+    # Topic & Audience metadata
+    target_audience: Optional[str]  # "Beginner" | "Intermediate" | "Advanced" | "Executive"
     topic_type: Optional[str]  # "trending" | "evergreen"
     category: Optional[str]    # "tech" | "ai" | "health" | "finance" | "general"
     today_date: Optional[str]  # YYYY-MM-DD
+    content_plan: Optional[Dict[str, Any]]  # Structured outline, sections, code plan, FAQ plan
 
     # Planning & Multi-Source Collection
     planned_queries: List[str]

@@ -10,8 +10,9 @@ export function GenerationProvider({ children }) {
   // Active form inputs
   const [topic, setTopic] = useState('');
   const [tone, setTone] = useState('Informative');
+  const [targetAudience, setTargetAudience] = useState('Beginner');
   const [targetLanguage, setTargetLanguage] = useState('English');
-  const [wordCount, setWordCount] = useState(800);
+  const [wordCount, setWordCount] = useState(1500);
 
   // Execution state
   const [isGenerating, setIsGenerating] = useState(false);
@@ -27,7 +28,13 @@ export function GenerationProvider({ children }) {
   const isGeneratingRef = useRef(false);
 
   const startGeneration = useCallback(async (payload, onCompleteNavigate) => {
-    const { topic: t, tone: to, target_language: tl, word_count: wc = 800 } = payload;
+    const {
+      topic: t,
+      tone: to,
+      target_language: tl,
+      word_count: wc = 1500,
+      target_audience: ta = 'Beginner',
+    } = payload;
     if (!t || !t.trim()) return;
 
     setIsGenerating(true);
@@ -43,13 +50,13 @@ export function GenerationProvider({ children }) {
       id: Date.now(),
       timestamp: new Date().toLocaleTimeString(),
       node: 'system',
-      message: `Launched autonomous pipeline for: "${t.slice(0, 50)}..." [Tone: ${to}, Language: ${tl}, Target: ${wc} words]`,
+      message: `Launched autonomous pipeline for: "${t.slice(0, 50)}..." [Audience: ${ta}, Tone: ${to}, Language: ${tl}, Target: ${wc} words]`,
     };
     setExecutionLogs([initialLog]);
 
     try {
       await generateBlogStream(
-        { topic: t, tone: to, target_language: tl, word_count: wc },
+        { topic: t, tone: to, target_language: tl, word_count: wc, target_audience: ta },
         (event) => {
           if (!isGeneratingRef.current) return;
 
@@ -165,6 +172,8 @@ export function GenerationProvider({ children }) {
         setTopic,
         tone,
         setTone,
+        targetAudience,
+        setTargetAudience,
         targetLanguage,
         setTargetLanguage,
         wordCount,

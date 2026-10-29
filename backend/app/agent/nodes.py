@@ -10,6 +10,7 @@ from backend.app.schema.state_schema import BlogState, FactItem, VerificationRep
 from backend.app.core.prompts import (
     QUERY_PLANNING_SYSTEM_PROMPT,
     TITLE_SYSTEM_PROMPT,
+    CONTENT_PLANNER_SYSTEM_PROMPT,
     CONTENT_SYSTEM_PROMPT,
     VERIFIER_SYSTEM_PROMPT,
     TRANSLATION_SYSTEM_PROMPT,
@@ -395,6 +396,117 @@ async def generate_title_node(state: BlogState) -> dict:
 
 
 # ==========================================
+# 5b. Content Planning Agent Node
+# ==========================================
+async def content_plan_node(state: BlogState) -> dict:
+    """
+    Node 5b: Content Planning Agent.
+    Synthesizes research, target audience, tone, and topic to design a pedagogical blueprint:
+    - Structured outline with Markdown anchor IDs
+    - Python code demonstration specification (with expected outputs and explanation points)
+    - Comparison table plan (e.g. paradigms, algorithms, architectures)
+    - Common pitfalls & best practices
+    - FAQ section targeting common beginner/intermediate confusions
+    """
+    start_time = time.perf_counter()
+    topic = state.get("topic", "")
+    title = state.get("title", topic)
+    audience = state.get("target_audience") or "Beginner"
+    tone = state.get("tone", "Informative")
+    target_words = state.get("target_word_count") or 1500
+    if target_words < 400:
+        target_words = 1500
+
+    facts = state.get("facts", [])
+    facts_preview = "\n".join([f"[{f.get('id')}] {f.get('claim')}" for f in facts[:8]]) or "General verified educational context."
+
+    logger.info(f"[Node 5b: Content Planner] Blueprinting '{title}' for Audience: '{audience}', Words: {target_words}...")
+
+    llm = get_llm("content_planner")
+    user_payload = (
+        f"Topic: {topic}\n"
+        f"Proposed Title: {title}\n"
+        f"Target Audience: {audience}\n"
+        f"Tone: {tone}\n"
+        f"Target Length: ~{target_words} words\n\n"
+        f"Verified Facts Context:\n{facts_preview}\n\n"
+        "Generate a structured educational blueprint JSON with sections, code_example, comparison_table, pitfalls, and faqs."
+    )
+
+    messages = [
+        SystemMessage(content=CONTENT_PLANNER_SYSTEM_PROMPT),
+        HumanMessage(content=user_payload),
+    ]
+
+    content_plan = {}
+    try:
+        response = await safe_llm_invoke(llm, messages)
+        raw_output = response.content.strip()
+
+        clean_json = raw_output
+        if "```" in clean_json:
+            m = re.search(r"```(?:json)?\s*(\{.*?\})\s*```", clean_json, re.DOTALL)
+            if m:
+                clean_json = m.group(1).strip()
+            else:
+                clean_json = re.sub(r"^```[a-zA-Z]*\n", "", clean_json)
+                clean_json = re.sub(r"\n```$", "", clean_json)
+
+        content_plan = json.loads(clean_json)
+        logger.info(f"[Content Planner] Successfully generated plan with {len(content_plan.get('sections', []))} sections.")
+    except Exception as e:
+        logger.warning(f"[Content Planner] LLM plan parsing failed: {e}. Generating default educational plan.")
+        content_plan = {
+            "title": title,
+            "target_audience": audience,
+            "table_of_contents": [
+                {"title": "Introduction & Intuition", "anchor": "introduction-intuition"},
+                {"title": "Core Concepts & Architecture", "anchor": "core-concepts-architecture"},
+                {"title": "Hands-on Implementation in Python", "anchor": "hands-on-implementation-in-python"},
+                {"title": "Comparative Analysis", "anchor": "comparative-analysis"},
+                {"title": "Common Pitfalls & Best Practices", "anchor": "common-pitfalls-best-practices"},
+                {"title": "Frequently Asked Questions", "anchor": "frequently-asked-questions"},
+                {"title": "Summary & Key Takeaways", "anchor": "summary-key-takeaways"},
+            ],
+            "code_example": {
+                "topic": f"Practical {topic} demonstration using standard libraries",
+                "features": ["Readable variables", "Step-by-step comments", "Practical print output"],
+            },
+            "comparison_table": {
+                "aspect": "Core Approaches / Paradigms",
+                "columns": ["Method", "Primary Use Case", "Key Advantages", "Trade-offs"],
+            },
+            "pitfalls": [
+                "Premature optimization without profiling",
+                "Overlooking baseline models and simple alternatives",
+                "Data leakage or improper evaluation metrics",
+            ],
+            "faqs": [
+                f"What are the prerequisites for learning {topic}?",
+                f"How is {topic} used in real-world production environments?",
+                "What common libraries and frameworks should I explore next?",
+            ]
+        }
+
+    steps = list(state.get("steps_completed", []))
+    if "content_planner" not in steps:
+        steps.append("content_planner")
+
+    node_timings = dict(state.get("node_timings") or {})
+    node_timings["content_planner"] = round(time.perf_counter() - start_time, 3)
+
+    result = {
+        "content_plan": content_plan,
+        "current_step": "content_plan_completed",
+        "steps_completed": steps,
+        "node_timings": node_timings,
+    }
+    llm_metrics = {"provider": settings.MODEL_PROVIDER, "model": settings.MODEL_NAME, "temperature": 0.2}
+    await record_node_step("content_planner", state, result, start_time, llm_metrics)
+    return result
+
+
+# ==========================================
 # 6. Content Generator / Writer Node
 # ==========================================
 async def generate_content_node(state: BlogState) -> dict:
@@ -410,12 +522,17 @@ async def generate_content_node(state: BlogState) -> dict:
 
     # Step down temperature by 0.1 per revision (min 0.1)
     effective_temp = max(0.1, round(base_temp - (0.1 * min(revisions, 2)), 2))
-    target_words = state.get("target_word_count") or 800
-    needed_max_tokens = max(2048, min(8192, int(target_words * 2.2)))
+    target_words = state.get("target_word_count") or 1500
+    if target_words < 400:
+        target_words = 1500
+    needed_max_tokens = max(3000, min(8192, int(target_words * 2.2)))
+
+    target_audience = state.get("target_audience") or "Beginner"
+    content_plan = state.get("content_plan")
 
     logger.info(
         f"[Node 6: Writer] Drafting '{state['title']}' (Target: {target_words} words, "
-        f"Revision #{revisions}, Temp: {effective_temp}, MaxTokens: {needed_max_tokens})"
+        f"Audience: {target_audience}, Revision #{revisions}, Temp: {effective_temp}, MaxTokens: {needed_max_tokens})"
     )
 
     llm = get_llm(
@@ -428,12 +545,29 @@ async def generate_content_node(state: BlogState) -> dict:
     facts_table_md = state.get("research_data") or "No verified facts table available."
     today_date = state.get("today_date") or datetime.now(timezone.utc).strftime("%Y-%m-%d")
 
+    plan_block = ""
+    if content_plan:
+        plan_str = json.dumps(content_plan, indent=2) if isinstance(content_plan, dict) else str(content_plan)
+        plan_block = (
+            f"TARGET AUDIENCE: {target_audience}\n"
+            f"APPROVED ARCHITECTURAL CONTENT PLAN:\n{plan_str}\n\n"
+            f"EXECUTION BLUEPRINT:\n"
+            f"1. Table of Contents: Provide an anchor-linked Table of Contents immediately following the introduction (`[Section](#anchor-slug)`).\n"
+            f"2. Core Concepts: Explain each concept with relatable analogies tailored to {target_audience} learners, using clear H2 and H3 headings.\n"
+            f"3. Practical Python Code: Provide complete, runnable Python code with line-by-line explanations and expected output.\n"
+            f"4. Comparison Table: Include a formatted Markdown table comparing approaches/paradigms.\n"
+            f"5. Best Practices & Common Mistakes: Detail at least 3 common pitfalls and recommended best practices.\n"
+            f"6. FAQs: Include an FAQ section with 3-5 high-value questions and answers.\n"
+            f"7. Summary: Conclude with key takeaways.\n\n"
+        )
+
     prompt_content = (
         f"Title: {state['title']}\n"
         f"Topic: {state['topic']}\n"
         f"Tone: {state.get('tone', 'Informative')}\n"
         f"Target Length: Approximately {target_words} words (Allowable range: {int(target_words * 0.85)} - {int(target_words * 1.15)} words)\n"
         f"Current Date: {today_date}\n\n"
+        f"{plan_block}"
         f"VERIFIED RESEARCH CONTEXT & FACTS:\n"
         f"{facts_table_md}\n\n"
     )

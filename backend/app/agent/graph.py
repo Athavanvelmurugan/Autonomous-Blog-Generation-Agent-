@@ -7,6 +7,7 @@ from backend.app.agent.nodes import (
     clean_dedupe_node,
     extract_facts_node,
     generate_title_node,
+    content_plan_node,
     generate_content_node,
     verify_content_node,
     translate_content_node,
@@ -43,6 +44,7 @@ workflow.add_node("collect", collect_node)
 workflow.add_node("clean_dedupe", clean_dedupe_node)
 workflow.add_node("extract_facts", extract_facts_node)
 workflow.add_node("title_generator", generate_title_node)
+workflow.add_node("content_planner", content_plan_node)
 workflow.add_node("content_generator", generate_content_node)
 workflow.add_node("verifier_agent", verify_content_node)
 workflow.add_node("translator", translate_content_node)
@@ -84,7 +86,8 @@ workflow.add_conditional_edges(
     },
 )
 
-workflow.add_edge("title_generator", "content_generator")
+workflow.add_edge("title_generator", "content_planner")
+workflow.add_edge("content_planner", "content_generator")
 workflow.add_edge("content_generator", "verifier_agent")
 
 

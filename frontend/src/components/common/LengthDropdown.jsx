@@ -2,13 +2,13 @@ import React, { useState, useRef, useEffect } from 'react';
 import { FileText, ChevronDown, Check, Sliders, Minus, Plus, Sparkles } from 'lucide-react';
 
 const PRESETS = [
-  { id: 500, label: 'Short Brief', words: 500, estRead: '2-3 min read', desc: 'Fast summaries, executive briefs & social teasers' },
-  { id: 800, label: 'Standard Article', words: 800, estRead: '4-5 min read', desc: 'Balanced depth, ideal for general tech & editorial blogs', popular: true },
-  { id: 1200, label: 'In-Depth Guide', words: 1200, estRead: '6-8 min read', desc: 'Comprehensive tutorial with deep architectural explanations' },
-  { id: 2000, label: 'Exhaustive Deep-Dive', words: 2000, estRead: '10-12 min read', desc: 'Authoritative whitepaper & multi-faceted breakdown' },
+  { id: 600, label: 'Short Overview', words: 600, estRead: '3-4 min read', desc: 'Concise summary with core definitions and takeaways' },
+  { id: 1200, label: 'Standard Guide', words: 1200, estRead: '6-7 min read', desc: 'Balanced educational article with fundamentals & illustrations' },
+  { id: 1600, label: 'Detailed Educational Article', words: 1600, estRead: '8-10 min read', desc: 'Comprehensive tutorial with code breakdown, comparison tables & FAQs', popular: true },
+  { id: 2400, label: 'Comprehensive Masterclass', words: 2400, estRead: '12-15 min read', desc: 'Authoritative deep-dive with end-to-end architecture & edge cases' },
 ];
 
-const QUICK_CHIPS = [350, 650, 1000, 1500, 2500, 3000];
+const QUICK_CHIPS = [600, 1000, 1200, 1600, 2000, 2400];
 
 export default function LengthDropdown({
   value,
@@ -22,7 +22,7 @@ export default function LengthDropdown({
   const containerRef = useRef(null);
   const customInputRef = useRef(null);
 
-  const numericValue = Number(value) || 800;
+  const numericValue = Number(value) || 1600;
   const isMatchingPreset = PRESETS.some((p) => p.words === numericValue);
   const activePreset = PRESETS.find((p) => p.words === numericValue);
 

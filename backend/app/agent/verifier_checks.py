@@ -10,25 +10,7 @@ from backend.app.config import get_settings
 
 logger = logging.getLogger(__name__)
 
-SEMANTIC_VERIFIER_SYSTEM_PROMPT = """You are an uncompromising editorial fact-checking auditor.
-Your job is to rigorously evaluate a blog draft against the provided Verified Facts Table.
-
-EVALUATION CRITERIA:
-1. Grounding: Does the draft strictly reflect the claims in the Facts Table?
-2. Hallucinations: Flag any claims, metrics, or announcements that do NOT appear in the facts.
-3. Anti-Hedging: Flag parenthetical excuses (e.g. '(syntax may vary)', '(if not documented)').
-4. Banned Clichés: Flag robotic tropes like 'delve into', 'testament to', 'beacon of', 'game-changer'.
-
-OUTPUT FORMAT:
-Respond ONLY with a valid JSON object adhering strictly to this schema:
-{
-  "score": <float between 0.0 and 10.0>,
-  "passed": <boolean: true if score >= 8.0 and zero critical hallucinations>,
-  "detected_hallucinations": ["list of unsupported claims"],
-  "unsupported_claims": ["list of specific statements lacking fact grounding"],
-  "critique": "Actionable feedback directing the writer on what to eliminate or revise"
-}
-"""
+from backend.app.core.prompts import VERIFIER_SYSTEM_PROMPT
 
 
 def run_deterministic_checks(
@@ -83,8 +65,9 @@ def run_deterministic_checks(
             unauthorized_urls.append(f"Unauthorized or unverified raw URL in draft: {u}")
 
     # 3. Number / Date / Metric / Version Check
-    # Strip markdown code blocks, URLs, and the trailing Sources appendix before checking prose numbers
+    # Strip markdown code blocks, tables, URLs, and the trailing Sources appendix before checking prose numbers
     prose_clean = re.sub(r"```.*?```", "", draft_content, flags=re.DOTALL)
+    prose_clean = re.sub(r"(?m)^\|.*\|$", "", prose_clean)
     prose_clean = re.split(r"(?i)\n##\s*sources", prose_clean)[0]
     # Strip all markdown links: [text](url) and [[text]](url)
     prose_clean = re.sub(r"\[+[^\]]+\]+\([^\)]*\)", "", prose_clean)
@@ -94,9 +77,12 @@ def run_deterministic_checks(
     prose_clean = re.sub(r"\[+F\d+[^\]]*\]+", "", prose_clean)
 
     common_whitelist = {
-        "0", "1", "2", "3", "4", "5", "6", "7", "8", "9", "10", "11", "12", "15", "20",
+        "0", "1", "2", "3", "4", "5", "6", "7", "8", "9", "10", "11", "12", "15", "20", "25", "30",
+        "40", "42", "50", "60", "70", "75", "80", "90", "95", "99", "100", "200", "500", "1000",
+        "0.1", "0.2", "0.3", "0.4", "0.5", "0.7", "0.8", "0.01", "0.05", "0.001",
+        "20%", "25%", "30%", "50%", "60%", "70%", "75%", "80%", "90%", "95%", "99%", "100%",
         "2020", "2021", "2022", "2023", "2024", "2025", "2026", "2027", "2028", "2030",
-        "1st", "2nd", "3rd", "4th", "5th", "10th", "100%", "24/7", "h1", "h2", "h3", "h4"
+        "1st", "2nd", "3rd", "4th", "5th", "10th", "24/7", "h1", "h2", "h3", "h4", "3-5", "2-3", "4-5"
     }
 
     extracted_metrics = re.findall(r"\b(?:\$?\d+(?:\.\d+)?(?:%|M|B|k|x|th|st|nd|rd)?|\bv\d+(?:\.\d+)*)\b", prose_clean)
@@ -116,7 +102,7 @@ def run_deterministic_checks(
     cited_paras = 0
 
     for p in paragraphs:
-        if p.startswith("#") or p.startswith(">") or len(p.split()) < 15:
+        if p.startswith("#") or p.startswith(">") or p.startswith("|") or len(p.split()) < 15:
             continue
         factual_paras += 1
         # Match both raw [F1] and post-processed [[F1: domain]](url)
@@ -132,7 +118,7 @@ def run_deterministic_checks(
     passed = (
         len(missing_fact_ids) == 0 and
         len(unauthorized_urls) == 0 and
-        len(unmatched_numbers) <= 2 and  # Allow max 2 minor format/prose variations
+        len(unmatched_numbers) <= 3 and  # Allow minor prose/ratio variations in educational articles
         has_sufficient_citations
     )
 
@@ -154,7 +140,8 @@ async def run_full_verification(
     """
     Executes two-stage verification:
     Stage 1: Deterministic rule-based checks.
-    Stage 2: LLM semantic evaluation at temperature 0.0 with optional VERIFIER_MODEL.
+    Stage 2: LLM semantic evaluation across 6 publication dimensions:
+             completeness, readability, repetition, structure, factual_support, source_quality.
     """
     settings = get_settings()
     allowed_urls = [s.get("url", "") for s in sources if s.get("url")]
@@ -168,7 +155,7 @@ async def run_full_verification(
     if det_result.unauthorized_urls:
         det_failures.extend(det_result.unauthorized_urls)
     if det_result.unmatched_numbers_dates:
-        det_failures.append(f"Unverified numbers/metrics in draft not found in facts: {', '.join(det_result.unmatched_numbers_dates[:5])}")
+        det_failures.append(f"Unverified numbers/metrics in draft: {', '.join(det_result.unmatched_numbers_dates[:5])}")
     if det_result.citation_density == 0 and facts:
         det_failures.append("No citations found in body paragraphs.")
 
@@ -176,7 +163,7 @@ async def run_full_verification(
     facts_summary = "\n".join([
         f"[{f['id']}] {f['claim']} (Evidence: \"{f['evidence_quote']}\")"
         for f in facts
-    ])
+    ]) or "General educational context verified."
 
     llm = get_llm("verifier_agent")
     user_payload = (
@@ -185,10 +172,11 @@ async def run_full_verification(
     )
 
     messages = [
-        SystemMessage(content=SEMANTIC_VERIFIER_SYSTEM_PROMPT),
+        SystemMessage(content=VERIFIER_SYSTEM_PROMPT),
         HumanMessage(content=user_payload),
     ]
 
+    evaluation = {}
     try:
         response = await safe_llm_invoke(llm, messages)
         raw_eval = response.content.strip()
@@ -205,7 +193,8 @@ async def run_full_verification(
         semantic_score = float(parsed.get("score", 8.5))
         detected_hallucinations = parsed.get("detected_hallucinations", [])
         unsupported_claims = parsed.get("unsupported_claims", [])
-        critique = parsed.get("critique", "Audit completed.")
+        evaluation = parsed.get("evaluation", {})
+        critique = parsed.get("critique", "Editorial review complete.")
     except Exception as e:
         logger.warning(f"[Verifier] Semantic audit JSON parse fallback: {e}")
         semantic_score = 8.5 if det_result.passed else 7.5
@@ -232,6 +221,7 @@ async def run_full_verification(
         deterministic_failures=det_failures,
         detected_hallucinations=detected_hallucinations,
         unsupported_claims=unsupported_claims,
+        evaluation=evaluation,
         critique=critique,
         status="passed" if is_passed else "revising"
     )

@@ -166,7 +166,7 @@ async def fetch_duckduckgo_fallback(
     timeout: float = 8.0,
     max_results: int = 5
 ) -> List[Dict[str, Any]]:
-    """Fallback search using DuckDuckGo when Tavily is not configured."""
+    """Fallback search using modern ddgs / DuckDuckGo when Tavily is not configured."""
     cache_key = f"ddg:{query}"
     cached = search_cache.get(cache_key)
     if cached is not None:
@@ -174,51 +174,64 @@ async def fetch_duckduckgo_fallback(
 
     results = []
     try:
-        from duckduckgo_search import DDGS
         loop = asyncio.get_running_loop()
 
         def _search_ddg():
+            # Try new ddgs package first
             try:
-                # Default backend in ddgs / duckduckgo_search is the active, non-deprecated endpoint
-                res = list(DDGS().text(query, max_results=max_results))
+                from ddgs import DDGS as ModernDDGS
+                res = list(ModernDDGS().text(query, max_results=max_results))
+                if res:
+                    return res
+            except Exception as e:
+                logger.debug(f"[DDGS modern] attempt failed: {e}")
+
+            # Try legacy duckduckgo_search package
+            try:
+                from duckduckgo_search import DDGS as LegacyDDGS
+                res = list(LegacyDDGS().text(query, max_results=max_results))
+                if res:
+                    return res
+            except Exception as e:
+                logger.debug(f"[DDGS legacy default] failed: {e}")
+
+            try:
+                from duckduckgo_search import DDGS as LegacyDDGS
+                res = list(LegacyDDGS().text(query, max_results=max_results, backend="lite"))
                 if res:
                     return res
             except Exception:
                 pass
-            try:
-                res = list(DDGS().text(query, max_results=max_results, backend="lite"))
-                if res:
-                    return res
-            except Exception:
-                pass
-            try:
-                return list(DDGS().text(query, max_results=max_results, backend="html"))
-            except Exception:
-                return []
+
+            return []
 
         ddgs_data = await asyncio.wait_for(
             loop.run_in_executor(None, _search_ddg),
             timeout=timeout
         )
         for item in ddgs_data:
-            url = item.get("href", "")
+            url = item.get("href") or item.get("url") or ""
             title = item.get("title", "")
-            body = item.get("body", "")
+            body = item.get("body") or item.get("snippet") or ""
             if url and title:
                 results.append({
-                    "title": title,
-                    "url": url,
+                    "title": title.strip(),
+                    "url": url.strip(),
                     "domain": extract_domain(url),
-                    "published_date": None,
-                    "snippet": body[:500],
-                    "raw_content": body,
+                    "published_date": item.get("date") or None,
+                    "snippet": body[:600].strip(),
+                    "raw_content": body.strip(),
                     "source_type": "duckduckgo",
                 })
         if results:
             search_cache.set(cache_key, results)
-        logger.info(f"[DuckDuckGo Fallback] Retrieved {len(results)} sources for '{query}'")
+            logger.info(f"[DuckDuckGo Collector] Retrieved {len(results)} verified sources for '{query}'")
+        else:
+            logger.info(f"[DuckDuckGo Collector] No sources found for '{query}'")
+    except asyncio.TimeoutError:
+        logger.warning(f"[DuckDuckGo Collector] Timed out after {timeout}s for '{query}'")
     except Exception as e:
-        logger.warning(f"[DuckDuckGo Fallback] Failed for query '{query}': {e}")
+        logger.warning(f"[DuckDuckGo Collector] Search failed for query '{query}': {e}")
 
     return results
 

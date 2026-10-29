@@ -3,11 +3,13 @@ import json
 import time
 import uuid
 import logging
+import re
 from contextlib import asynccontextmanager
 from typing import List, Optional
 from fastapi import FastAPI, HTTPException, Depends, Header, status, BackgroundTasks
-from fastapi.responses import StreamingResponse
+from fastapi.responses import StreamingResponse, HTMLResponse, Response
 from fastapi.middleware.cors import CORSMiddleware
+from pydantic import BaseModel
 from sqlalchemy.ext.asyncio import AsyncSession
 
 if sys.platform == "win32":
@@ -29,6 +31,7 @@ from backend.app.schema.api_schema import (
 )
 from backend.app.agent.checkpointer import init_checkpointer, close_checkpointer, get_graph
 from backend.app.core.cache import cache
+from backend.app.core.export_engine import generate_article_html, generate_article_pdf
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(name)s: %(message)s")
 logger = logging.getLogger(__name__)
@@ -137,15 +140,17 @@ async def generate_blog(
     # Idempotency and thread isolation
     idempotency_key = request.idempotency_key or f"run_{abs(hash(request.topic)) % 10000000}_{int(time.time())}"
     thread_id = f"thread_{idempotency_key}"
-    target_words = request.word_count or 800
+    target_words = request.word_count or 1500
 
     initial_state: BlogState = {
         "topic": request.topic.strip(),
         "tone": request.tone or "Informative",
+        "target_audience": getattr(request, "target_audience", None) or "Beginner",
         "target_language": request.target_language or "English",
         "target_word_count": target_words,
         "word_count": 0,
         "creativity": request.creativity or "balanced",
+        "content_plan": None,
         "planned_queries": [],
         "query_retry_count": 0,
         "raw_sources": [],
@@ -276,15 +281,17 @@ async def generate_blog_stream(
 
     idempotency_key = request.idempotency_key or f"run_{abs(hash(request.topic)) % 10000000}_{int(time.time())}"
     thread_id = f"thread_{idempotency_key}"
-    target_words = request.word_count or 800
+    target_words = request.word_count or 1500
 
     initial_state: BlogState = {
         "topic": request.topic.strip(),
         "tone": request.tone or "Informative",
+        "target_audience": getattr(request, "target_audience", None) or "Beginner",
         "target_language": request.target_language or "English",
         "target_word_count": target_words,
         "word_count": 0,
         "creativity": request.creativity or "balanced",
+        "content_plan": None,
         "topic_type": None,
         "category": None,
         "today_date": None,
@@ -359,6 +366,11 @@ async def generate_blog_stream(
                     elif node_name == "title_generator":
                         event_data["title"] = node_update.get("title")
                         event_data["message"] = f"Headline generated: {node_update.get('title')}"
+                    elif node_name == "content_planner":
+                        plan = node_update.get("content_plan") or {}
+                        num_secs = len(plan.get("sections", [])) if isinstance(plan, dict) else 6
+                        aud = getattr(request, "target_audience", None) or "Beginner"
+                        event_data["message"] = f"Curriculum blueprint formulated ({num_secs} modules, practical Python demo, comparison matrix) for {aud} learners."
                     elif node_name == "content_generator":
                         actual_cnt = node_update.get("word_count") or len(node_update.get("content", "").split())
                         event_data["word_count"] = actual_cnt
@@ -610,3 +622,116 @@ async def track_reader_event(
 
     background_tasks.add_task(record_event)
     return {"status": "recorded"}
+
+
+# ============================================================================
+# Export Endpoints: Publication-Quality HTML & PDF
+# ============================================================================
+@app.get("/api/blogs/{blog_id}/html", tags=["Export"])
+async def export_blog_html(
+    blog_id: int,
+    download: bool = False,
+    user_id: Optional[int] = Depends(get_optional_user_id),
+    db: AsyncSession = Depends(get_db)
+):
+    """
+    Renders the blog post as a standalone, responsive, modern educational HTML publication.
+    If ?download=true is passed, returns as downloadable .html attachment.
+    """
+    blog_repo = BlogRepository(db)
+    post = await blog_repo.get_blog_by_id(blog_id, user_id=user_id)
+    if not post or not post.latest_version:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Blog not found")
+
+    latest = post.latest_version
+    metadata = {
+        "topic": post.topic,
+        "target_audience": getattr(latest, "target_audience", "Beginner"),
+        "tone": post.tone,
+        "word_count": latest.word_count,
+        "created_at": post.created_at.strftime("%B %d, %Y") if post.created_at else None,
+    }
+    rendered_html = generate_article_html(latest.title, latest.content, metadata)
+
+    headers = {}
+    if download:
+        safe_name = re.sub(r"[^\w\-_.]", "_", latest.title)[:50]
+        headers["Content-Disposition"] = f'attachment; filename="{safe_name}.html"'
+
+    return HTMLResponse(content=rendered_html, headers=headers)
+
+
+@app.get("/api/blogs/{blog_id}/pdf", tags=["Export"])
+async def export_blog_pdf(
+    blog_id: int,
+    user_id: Optional[int] = Depends(get_optional_user_id),
+    db: AsyncSession = Depends(get_db)
+):
+    """
+    Generates a publication-grade, professionally typeset PDF with dark readable text,
+    styled tables, monospaced code blocks, running headers, and dynamic page numbering.
+    """
+    blog_repo = BlogRepository(db)
+    post = await blog_repo.get_blog_by_id(blog_id, user_id=user_id)
+    if not post or not post.latest_version:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Blog not found")
+
+    latest = post.latest_version
+    metadata = {
+        "topic": post.topic,
+        "target_audience": getattr(latest, "target_audience", "Beginner"),
+        "tone": post.tone,
+        "word_count": latest.word_count,
+        "created_at": post.created_at.strftime("%B %d, %Y") if post.created_at else None,
+    }
+    pdf_bytes = generate_article_pdf(latest.title, latest.content, metadata)
+    safe_name = re.sub(r"[^\w\-_.]", "_", latest.title)[:50]
+    return Response(
+        content=pdf_bytes,
+        media_type="application/pdf",
+        headers={
+            "Content-Disposition": f'attachment; filename="{safe_name}.pdf"',
+            "Content-Type": "application/pdf"
+        }
+    )
+
+
+class DirectExportRequest(BaseModel):
+    title: str
+    content: str
+    topic: Optional[str] = None
+    target_audience: Optional[str] = "Beginner"
+    tone: Optional[str] = "Informative"
+
+
+@app.post("/api/export/html", tags=["Export"])
+async def direct_export_html(request: DirectExportRequest):
+    """Renders direct markdown content to educational HTML."""
+    metadata = {
+        "topic": request.topic or request.title,
+        "target_audience": request.target_audience or "Beginner",
+        "tone": request.tone,
+    }
+    rendered_html = generate_article_html(request.title, request.content, metadata)
+    return HTMLResponse(content=rendered_html)
+
+
+@app.post("/api/export/pdf", tags=["Export"])
+async def direct_export_pdf(request: DirectExportRequest):
+    """Generates direct PDF from markdown content."""
+    metadata = {
+        "topic": request.topic or request.title,
+        "target_audience": request.target_audience or "Beginner",
+        "tone": request.tone,
+    }
+    pdf_bytes = generate_article_pdf(request.title, request.content, metadata)
+    safe_name = re.sub(r"[^\w\-_.]", "_", request.title)[:50]
+    return Response(
+        content=pdf_bytes,
+        media_type="application/pdf",
+        headers={
+            "Content-Disposition": f'attachment; filename="{safe_name}.pdf"',
+            "Content-Type": "application/pdf"
+        }
+    )
+

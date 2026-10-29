@@ -9,6 +9,13 @@ ROOT_DIR = Path(__file__).resolve().parent.parent.parent
 ENV_PATH = ROOT_DIR / ".env"
 BACKEND_ENV_PATH = ROOT_DIR / "backend" / ".env"
 
+# Ensure repository .env always overrides any stale Windows system environment variables
+from dotenv import load_dotenv
+if ENV_PATH.exists():
+    load_dotenv(ENV_PATH, override=True)
+if BACKEND_ENV_PATH.exists():
+    load_dotenv(BACKEND_ENV_PATH, override=True)
+
 
 class Settings(BaseSettings):
     model_config = SettingsConfigDict(

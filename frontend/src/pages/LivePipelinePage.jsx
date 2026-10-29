@@ -17,6 +17,8 @@ import {
   ArrowRight,
   AlertCircle,
   Clock,
+  Download,
+  FileText,
 } from 'lucide-react';
 
 export default function LivePipelinePage() {
@@ -60,12 +62,17 @@ export default function LivePipelinePage() {
     {
       id: 'title_generator',
       title: 'Title Generator',
-      desc: 'Fact-grounded SEO headline',
+      desc: 'Fact-grounded headline creation',
+    },
+    {
+      id: 'content_planner',
+      title: 'Content Blueprint',
+      desc: 'Pedagogical curriculum & code planning',
     },
     {
       id: 'content_generator',
-      title: revisionCount > 0 ? `Writer (Revision #${revisionCount})` : 'Factual Writer',
-      desc: revisionCount > 0 ? 'Refining draft against verifier audit' : 'Cited facts-only Markdown drafting',
+      title: revisionCount > 0 ? `Writer (Revision #${revisionCount})` : 'Educational Writer',
+      desc: revisionCount > 0 ? 'Refining draft against verifier audit' : 'Drafting full guide with code, tables & FAQs',
     },
     {
       id: 'verifier_agent',
@@ -397,19 +404,32 @@ export default function LivePipelinePage() {
                   </div>
                 </div>
 
-                <div style={{ display: 'flex', gap: 'var(--space-3)', marginTop: 'var(--space-2)' }}>
+                <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(130px, 1fr))', gap: 'var(--space-2)', marginTop: 'var(--space-3)' }}>
                   <Button
                     variant="primary"
-                    style={{ flex: 1 }}
                     onClick={() => navigate(`/articles/${activeResult.id}`)}
                   >
-                    Open in Article Studio
+                    Open Studio
                   </Button>
                   <Button
                     variant="secondary"
+                    leftIcon={Download}
+                    onClick={() => window.open(`/api/blogs/${activeResult.id}/pdf`, '_blank')}
+                  >
+                    Download PDF
+                  </Button>
+                  <Button
+                    variant="secondary"
+                    leftIcon={FileText}
+                    onClick={() => window.open(`/api/blogs/${activeResult.id}/html?download=true`, '_blank')}
+                  >
+                    Download HTML
+                  </Button>
+                  <Button
+                    variant="ghost"
                     onClick={() => navigate(`/articles/${activeResult.id}/audit`)}
                   >
-                    View Audit Report
+                    View Audit
                   </Button>
                 </div>
               </>

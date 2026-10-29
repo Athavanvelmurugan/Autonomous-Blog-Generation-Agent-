@@ -31,6 +31,8 @@ NODE_ALIASES = {
     "extract": "extract_facts",
     "research": "research_agent",
     "research_agent": "research_agent",
+    "content_planner": "content_planner",
+    "planner": "content_planner",
     "title": "title_generator",
     "title_generator": "title_generator",
     "write": "content_generator",
@@ -59,6 +61,13 @@ DEFAULT_NODE_SPECS = {
         "env_temp_keys": ["EXTRACT_TEMPERATURE", "RESEARCH_TEMPERATURE"],
         "env_tokens_keys": ["EXTRACT_MAX_TOKENS"],
         "env_model_keys": ["EXTRACT_MODEL", "RESEARCH_MODEL"],
+    },
+    "content_planner": {
+        "temperature": 0.2,
+        "max_tokens": 2048,
+        "env_temp_keys": ["PLANNER_TEMPERATURE", "CONTENT_PLANNER_TEMPERATURE"],
+        "env_tokens_keys": ["PLANNER_MAX_TOKENS", "CONTENT_PLANNER_MAX_TOKENS"],
+        "env_model_keys": ["PLANNER_MODEL", "CONTENT_PLANNER_MODEL"],
     },
     "research_agent": {
         "temperature": 0.0,

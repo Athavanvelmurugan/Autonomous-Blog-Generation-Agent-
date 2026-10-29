@@ -20,12 +20,17 @@ class BlogGenerationRequest(BaseModel):
         description="Target output language for the blog",
         examples=["English", "Spanish", "French", "German", "Hindi", "Japanese"]
     )
+    target_audience: Optional[str] = Field(
+        "Beginner",
+        description="Target audience level: Beginner, Intermediate, Advanced, Executive",
+        examples=["Beginner", "Intermediate", "Advanced", "Executive"]
+    )
     word_count: Optional[int] = Field(
-        800,
+        1500,
         ge=300,
-        le=4000,
-        description="Target word count for the generated article (between 300 and 4000 words)",
-        examples=[500, 800, 1200, 2000]
+        le=5000,
+        description="Target word count for the generated article (between 300 and 5000 words)",
+        examples=[800, 1500, 2500]
     )
     creativity: Optional[Literal["low", "balanced", "high"]] = Field(
         "balanced",
@@ -48,7 +53,8 @@ class BlogGenerationResponse(BaseModel):
     topic: str
     tone: str
     language: str
-    target_word_count: Optional[int] = Field(800, description="Requested target word count")
+    target_audience: Optional[str] = Field("Beginner", description="Target audience level")
+    target_word_count: Optional[int] = Field(1500, description="Requested target word count")
     word_count: Optional[int] = Field(None, description="Actual word count of the generated article")
     title: str
     content: str
@@ -67,7 +73,8 @@ class BlogPostSummary(BaseModel):
     topic: str
     tone: str
     target_language: str
-    target_word_count: Optional[int] = 800
+    target_audience: Optional[str] = "Beginner"
+    target_word_count: Optional[int] = 1500
     word_count: Optional[int] = None
     title: str
     content: str

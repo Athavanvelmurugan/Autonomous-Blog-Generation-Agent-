@@ -20,12 +20,16 @@ dependencies = [
     "asyncpg>=0.29.0",
     "greenlet>=3.1.0",
     "duckduckgo-search>=6.0.0",
+    "ddgs>=9.16.0",
+    "pymupdf>=2.0",
     "langchain-community>=0.3.0",
     "alembic>=1.20.0",
     "langgraph-checkpoint-postgres>=3.2.0",
     "pytest>=9.1.1",
     "pytest-asyncio>=1.4.0",
     "psycopg-binary>=3.3.6",
+    "markdown>=3.11.2",
+    "reportlab>=5.1.0",
 ]
 
 [build-system]

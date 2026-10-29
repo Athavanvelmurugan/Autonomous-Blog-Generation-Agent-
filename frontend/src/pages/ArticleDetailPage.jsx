@@ -208,23 +208,35 @@ export default function ArticleDetailPage() {
     return Math.max(1, Math.ceil(wordCount / 200));
   }, [wordCount]);
 
-  // Extract Table of Contents from Markdown
+  // Extract Table of Contents from Markdown (sections only; ignore leading document title)
   const tableOfContents = useMemo(() => {
     if (!currentContent) return [];
     const headings = [];
     const lines = currentContent.split('\n');
+    let isFirstHeading = true;
     lines.forEach((line) => {
       const match = /^(#{1,3})\s+(.+)$/.exec(line);
       if (match) {
         const level = match[1].length;
         const text = match[2].trim().replace(/\*|_|`/g, '');
         const slug = slugify(text);
+        if (isFirstHeading && level === 1) {
+          isFirstHeading = false;
+          return;
+        }
+        isFirstHeading = false;
         if (slug) {
           headings.push({ level, text, slug });
         }
       }
     });
     return headings;
+  }, [currentContent]);
+
+  // Strip leading H1 title from body to avoid repeating with article masthead
+  const displayBodyContent = useMemo(() => {
+    if (!currentContent) return '';
+    return currentContent.replace(/^\s*#\s+[^\n]+\n+/, '');
   }, [currentContent]);
 
   // Scrollspy observer for active heading in TOC
@@ -334,36 +346,74 @@ export default function ArticleDetailPage() {
     addToast('Downloaded .md file', 'info');
   };
 
-  // Download HTML (.html)
-  const handleDownloadHTML = () => {
-    const htmlDoc = `<!DOCTYPE html>
-<html lang="en">
-<head>
-  <meta charset="UTF-8">
-  <title>${currentTitle}</title>
-  <style>
-    body { font-family: 'Newsreader', Georgia, serif; max-width: 720px; margin: 40px auto; padding: 0 20px; line-height: 1.75; color: #1c1917; }
-    h1, h2, h3 { font-family: system-ui, -apple-system, sans-serif; }
-    pre { background: #f5f2eb; padding: 16px; border-radius: 8px; overflow-x: auto; }
-    blockquote { border-left: 3px solid #0f766e; padding-left: 16px; font-style: italic; color: #444; }
-  </style>
-</head>
-<body>
-  <h1>${currentTitle}</h1>
-  <div class="content">${currentContent}</div>
-</body>
-</html>`;
-    const blob = new Blob([htmlDoc], { type: 'text/html;charset=utf-8' });
-    const url = URL.createObjectURL(blob);
-    const link = document.createElement('a');
-    link.href = url;
-    link.download = `${slugify(currentTitle)}.html`;
-    link.click();
-    URL.revokeObjectURL(url);
-    addToast('Downloaded .html document', 'info');
+  // Download Publication HTML (.html)
+  const handleDownloadHTML = async () => {
+    try {
+      addToast('Preparing publication HTML...', 'info');
+      if (id && !isEditing) {
+        window.open(`/api/blogs/${id}/html?download=true`, '_blank');
+      } else {
+        const res = await fetch('/api/export/html', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            title: currentTitle,
+            content: currentContent,
+            topic: blog?.topic,
+            target_audience: blog?.target_audience || 'Beginner',
+            tone: blog?.tone || 'Informative',
+          }),
+        });
+        const htmlText = await res.text();
+        const blob = new Blob([htmlText], { type: 'text/html;charset=utf-8' });
+        const url = URL.createObjectURL(blob);
+        const link = document.createElement('a');
+        link.href = url;
+        link.download = `${slugify(currentTitle)}.html`;
+        link.click();
+        URL.revokeObjectURL(url);
+      }
+      addToast('Downloaded publication HTML!', 'success');
+    } catch (e) {
+      console.error(e);
+      addToast('Failed to download HTML export', 'error');
+    }
   };
 
-  // Print / PDF Export
+  // Download Publication PDF (.pdf)
+  const handleDownloadPDF = async () => {
+    try {
+      addToast('Generating publication PDF...', 'info');
+      if (id && !isEditing) {
+        window.open(`/api/blogs/${id}/pdf`, '_blank');
+      } else {
+        const res = await fetch('/api/export/pdf', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            title: currentTitle,
+            content: currentContent,
+            topic: blog?.topic,
+            target_audience: blog?.target_audience || 'Beginner',
+            tone: blog?.tone || 'Informative',
+          }),
+        });
+        const blob = await res.blob();
+        const url = URL.createObjectURL(blob);
+        const link = document.createElement('a');
+        link.href = url;
+        link.download = `${slugify(currentTitle)}.pdf`;
+        link.click();
+        URL.revokeObjectURL(url);
+      }
+      addToast('Downloaded publication PDF!', 'success');
+    } catch (e) {
+      console.error(e);
+      addToast('Failed to download PDF', 'error');
+    }
+  };
+
+  // Print / Browser Print
   const handlePrintPDF = () => {
     window.print();
   };
@@ -517,13 +567,23 @@ export default function ArticleDetailPage() {
             </Button>
 
             <Button
-              variant="ghost"
+              variant="secondary"
               size="sm"
               leftIcon={Printer}
-              onClick={handlePrintPDF}
-              title="Print / Save as PDF (@media print)"
+              onClick={handleDownloadPDF}
+              title="Download publication-grade PDF"
             >
               PDF
+            </Button>
+
+            <Button
+              variant="ghost"
+              size="sm"
+              leftIcon={FileCode}
+              onClick={handleDownloadHTML}
+              title="Download standalone publication HTML"
+            >
+              HTML
             </Button>
 
             <Button
@@ -1060,6 +1120,7 @@ export default function ArticleDetailPage() {
               <header className="no-print" style={{ maxWidth: columnWidth, margin: '0 auto var(--space-8) auto', borderBottom: '1px solid var(--border-subtle)', paddingBottom: 'var(--space-6)' }}>
                 <div style={{ display: 'flex', alignItems: 'center', gap: 'var(--space-2)', marginBottom: 'var(--space-3)' }}>
                   <Badge variant="primary">{blog.tone || 'Informative'}</Badge>
+                  <Badge variant="neutral">Audience: {blog.target_audience || 'Beginner'}</Badge>
                   <Badge variant="neutral">{blog.target_language || 'English'}</Badge>
                   <span style={{ fontSize: 'var(--text-xs)', color: 'var(--text-tertiary)' }}>
                     Published {blog.created_at ? new Date(blog.created_at).toLocaleDateString() : 'Recently'}
@@ -1156,7 +1217,7 @@ export default function ArticleDetailPage() {
                 </div>
               ) : (
                 <MarkdownRenderer
-                  content={currentContent}
+                  content={displayBodyContent}
                   onCopyHeadingLink={(slug) => addToast(`Heading link #${slug} copied!`, 'info')}
                 />
               )}
@@ -1192,12 +1253,20 @@ export default function ArticleDetailPage() {
                   View Quality Audit
                 </Button>
                 <Button
+                  variant="secondary"
+                  size="sm"
+                  leftIcon={FileCode}
+                  onClick={handleDownloadHTML}
+                >
+                  Download HTML
+                </Button>
+                <Button
                   variant="primary"
                   size="sm"
                   leftIcon={Printer}
-                  onClick={handlePrintPDF}
+                  onClick={handleDownloadPDF}
                 >
-                  Print / Export PDF
+                  Download PDF
                 </Button>
               </div>
             </footer>
